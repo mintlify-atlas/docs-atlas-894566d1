@@ -1,0 +1,274 @@
+---
+title: 'Authentication'
+description: 'HTTP message signatures and signed headers for Sigilum API authentication'
+---
+
+## Overview
+
+The Sigilum API uses HTTP message signatures (RFC 9421) to authenticate and authorize API requests. All protected endpoints require cryptographically signed headers that prove:
+
+1. The request originates from an authorized agent
+2. The request has not been tampered with
+3. The request is fresh (not a replay attack)
+4. The agent is authorized for the specified namespace
+
+## Signed Headers
+
+Every authenticated request must include these headers:
+
+### Required Headers
+
+<ParamField header="signature-input" type="string" required>
+  Specifies which components are signed and signature metadata.
+  
+  **Format:**
+  ```
+  sig1=("@method" "@target-uri" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=<timestamp>;keyid="<key-id>";alg="ed25519";nonce="<nonce>"
+  ```
+  
+  **With body (adds content-digest):**
+  ```
+  sig1=("@method" "@target-uri" "content-digest" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=<timestamp>;keyid="<key-id>";alg="ed25519";nonce="<nonce>"
+  ```
+</ParamField>
+
+<ParamField header="signature" type="string" required>
+  Base64-encoded Ed25519 signature over the signing base.
+  
+  **Format:**
+  ```
+  sig1=:<base64-signature>:
+  ```
+</ParamField>
+
+<ParamField header="sigilum-namespace" type="string" required>
+  The namespace identifier this request is scoped to (e.g., `acme-corp`).
+  
+  Must match the namespace in the agent certificate.
+</ParamField>
+
+<ParamField header="sigilum-subject" type="string" required>
+  Subject identifier for the requesting principal. Used for user-scoped authorization policies.
+  
+  This should be a stable identifier for the end user or service account making the request.
+</ParamField>
+
+<ParamField header="sigilum-agent-key" type="string" required>
+  The agent's Ed25519 public key.
+  
+  **Format:**
+  ```
+  ed25519:<base64-public-key>
+  ```
+</ParamField>
+
+<ParamField header="sigilum-agent-cert" type="string" required>
+  Base64url-encoded agent certificate JSON issued by the gateway.
+  
+  Certificate structure:
+  ```json
+  {
+    "version": 1,
+    "namespace": "acme-corp",
+    "did": "did:sigilum:acme-corp",
+    "keyId": "agent-key-1",
+    "publicKey": "ed25519:...",
+    "issuedAt": "2024-01-15T10:30:00Z",
+    "expiresAt": null,
+    "proof": {
+      "alg": "ed25519",
+      "sig": "<base64url-signature>"
+    }
+  }
+  ```
+</ParamField>
+
+<ParamField header="content-digest" type="string">
+  Required when request body is present. SHA-256 digest of the exact request body.
+  
+  **Format:**
+  ```
+  sha-256=:<base64-digest>:
+  ```
+  
+  **Computation:**
+  ```javascript
+  const bodyBytes = new TextEncoder().encode(JSON.stringify(body));
+  const digest = await crypto.subtle.digest('SHA-256', bodyBytes);
+  const base64 = btoa(String.fromCharCode(...new Uint8Array(digest)));
+  const contentDigest = `sha-256=:${base64}:`;
+  ```
+</ParamField>
+
+## Signature Computation
+
+### 1. Build Signing Base
+
+The signing base is constructed from signed components:
+
+```
+"@method": <lowercase-method>
+"@target-uri": <full-normalized-uri>
+"content-digest": sha-256=:<digest>:
+"sigilum-namespace": <namespace>
+"sigilum-subject": <subject>
+"sigilum-agent-key": ed25519:<key>
+"sigilum-agent-cert": <cert>
+"@signature-params": (<components>);created=<timestamp>;keyid="<key-id>";alg="ed25519";nonce="<nonce>"
+```
+
+### 2. Sign with Ed25519
+
+```javascript
+const signingBase = buildSigningBase(request);
+const signingBaseBytes = new TextEncoder().encode(signingBase);
+
+// Sign with private key
+const signature = await crypto.subtle.sign(
+  'Ed25519',
+  privateKey,
+  signingBaseBytes
+);
+
+// Base64 encode signature
+const signatureBase64 = btoa(String.fromCharCode(...new Uint8Array(signature)));
+```
+
+### 3. Add Headers
+
+```javascript
+request.headers.set('signature-input', signatureInput);
+request.headers.set('signature', `sig1=:${signatureBase64}:`);
+request.headers.set('sigilum-namespace', namespace);
+request.headers.set('sigilum-subject', subject);
+request.headers.set('sigilum-agent-key', `ed25519:${publicKeyBase64}`);
+request.headers.set('sigilum-agent-cert', certificateBase64Url);
+if (hasBody) {
+  request.headers.set('content-digest', contentDigest);
+}
+```
+
+## Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://api.sigilum.id/v1/verify?namespace=acme-corp&public_key=ed25519:abc123&service=my-service' \
+  -H 'signature-input: sig1=("@method" "@target-uri" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=1705320000;keyid="agent-key-1";alg="ed25519";nonce="abc123xyz"' \
+  -H 'signature: sig1=:MEUCIQDx...base64...==:' \
+  -H 'sigilum-namespace: acme-corp' \
+  -H 'sigilum-subject: user@example.com' \
+  -H 'sigilum-agent-key: ed25519:LS0tLS1CRUdJTi...' \
+  -H 'sigilum-agent-cert: eyJ2ZXJzaW9uIjoxLCJuYW1lc3BhY2UiOi...'
+```
+
+```javascript JavaScript
+import { sign } from '@sigilum/sdk';
+
+const response = await fetch('https://api.sigilum.id/v1/verify', {
+  method: 'GET',
+  headers: await sign({
+    method: 'GET',
+    url: 'https://api.sigilum.id/v1/verify?namespace=acme-corp&public_key=ed25519:abc123&service=my-service',
+    namespace: 'acme-corp',
+    subject: 'user@example.com',
+    privateKey: agentPrivateKey,
+    certificate: agentCertificate,
+  }),
+});
+```
+
+</CodeGroup>
+
+## Service API Keys
+
+Service endpoints (e.g., `POST /v1/claims`) require both signed headers AND a Bearer token:
+
+<ParamField header="Authorization" type="string" required>
+  Service API key as Bearer token.
+  
+  **Format:**
+  ```
+  Bearer <service_api_key>
+  ```
+</ParamField>
+
+### Example with API Key
+
+```bash
+curl -X POST 'https://api.sigilum.id/v1/claims' \
+  -H 'Authorization: Bearer sk_live_...' \
+  -H 'signature-input: sig1=("@method" "@target-uri" "content-digest" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=1705320000;keyid="agent-key-1";alg="ed25519";nonce="abc123"' \
+  -H 'signature: sig1=:MEUCIQDx...==:' \
+  -H 'content-digest: sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:' \
+  -H 'sigilum-namespace: acme-corp' \
+  -H 'sigilum-subject: user@example.com' \
+  -H 'sigilum-agent-key: ed25519:LS0tLS1CRUdJTi...' \
+  -H 'sigilum-agent-cert: eyJ2ZXJzaW9uIjox...' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "namespace": "acme-corp",
+    "public_key": "ed25519:abc123",
+    "service": "my-service",
+    "agent_ip": "203.0.113.45",
+    "nonce": "abc123",
+    "subject": "user@example.com"
+  }'
+```
+
+## Nonce and Replay Protection
+
+Each signature must include a unique nonce to prevent replay attacks:
+
+- **Nonce format**: 8-256 character string
+- **Nonce storage**: Tracked by Durable Object for replay detection
+- **Nonce lifetime**: Matches signature `created` timestamp validity window (60 seconds default)
+
+The same nonce cannot be reused within the validity window.
+
+## Signature Validation
+
+The API validates signatures in this order:
+
+1. **Header presence**: All required headers exist
+2. **Format validation**: Headers match expected format
+3. **Signature age**: `created` timestamp within allowed window (60 seconds)
+4. **Certificate verification**: Agent certificate signature is valid
+5. **Header matching**: Certificate namespace/key matches headers
+6. **Component set**: Signed components match requirements
+7. **Content digest**: Body digest matches (if body present)
+8. **Signature verification**: Ed25519 signature over signing base is valid
+9. **Nonce check**: Nonce is unique within validity window
+
+## Security Considerations
+
+### Clock Skew
+
+The API allows up to 60 seconds of clock skew by default. Ensure your system clock is synchronized with NTP.
+
+### Key Management
+
+Private keys should:
+- Never be transmitted over the network
+- Be stored securely (e.g., hardware security module, encrypted keystore)
+- Have appropriate access controls
+- Be rotated periodically
+
+### Certificate Expiration
+
+Agent certificates can have optional expiration times. The API validates `expiresAt` if present.
+
+### Transport Security
+
+Always use HTTPS in production. HTTP is only supported for local development (`http://localhost:8787`).
+
+## Using the Gateway
+
+The recommended approach is to use the Sigilum Gateway, which handles:
+
+- Certificate issuance and renewal
+- Signature computation
+- Nonce generation
+- Request signing
+
+See the [Gateway documentation](/gateway/overview) for setup instructions.

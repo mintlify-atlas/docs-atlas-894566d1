@@ -1,0 +1,523 @@
+---
+title: OpenClaw Integration
+description: Connect Sigilum to OpenClaw agents with one command
+icon: robot
+---
+
+# OpenClaw Integration
+
+Sigilum integrates with OpenClaw through hooks, skills, and a one-command installer that enables auditable, claim-gated API access for your AI agents.
+
+## Quick Start
+
+Install Sigilum OpenClaw integration with a single command:
+
+```bash
+./sigilum openclaw install
+```
+
+The installer will prompt for:
+- **Namespace**: Your Sigilum account identifier
+- **OpenClaw home**: Path to `.openclaw` directory (default: `~/.openclaw`)
+- **API URL**: Sigilum API endpoint (default: `https://api.sigilum.id`)
+
+<Steps>
+  <Step title="Install integration">
+    Run the installer from your Sigilum source directory:
+    ```bash
+    ./sigilum openclaw install
+    ```
+    
+    For local development with OSS mode:
+    ```bash
+    ./sigilum openclaw install --mode oss-local --api-url http://127.0.0.1:8787
+    ```
+  </Step>
+
+  <Step title="Verify installation">
+    Check that hooks and skills were installed successfully:
+    ```bash
+    ./sigilum openclaw status
+    ```
+  </Step>
+
+  <Step title="Configure provider access">
+    Add provider connections through the Sigilum gateway (see [Provider Connectors](/integrations/providers)).
+  </Step>
+</Steps>
+
+## What Gets Installed
+
+The installer configures three main components:
+
+### 1. Hooks
+
+#### `sigilum-plugin` Hook
+
+Bootstraps Sigilum identity and context for each OpenClaw agent.
+
+**What it does:**
+- Creates one Ed25519 keypair per agent ID under `~/.openclaw/.sigilum/keys/`
+- Injects gateway-first policy into agent context
+- Lists active `sigilum-secure-*` gateway connections
+- Captures sender identity hints for automatic `sigilum-subject` resolution
+- Writes runtime credential discovery report
+
+**Events:** `gateway:startup`, `command:new`, `config:reload`, `message:received`
+
+**Required environment:**
+- `SIGILUM_NAMESPACE` - Your Sigilum namespace
+
+**Optional environment:**
+- `SIGILUM_GATEWAY_URL` - Gateway base URL (default: `http://localhost:38100`)
+- `SIGILUM_API_URL` - API base URL
+- `SIGILUM_KEY_ROOT` - Agent key storage path
+- `SIGILUM_AUTO_BOOTSTRAP_AGENTS` - Auto-create agent keys (default: `true`)
+
+#### `sigilum-authz-notify` Hook
+
+<Warning>
+This hook is **disabled by default** and requires namespace owner credentials.
+</Warning>
+
+Optional notification hook for pending authorization requests.
+
+**What it does:**
+- Polls for pending authorization requests
+- Sends in-channel reminders to operators
+
+**Security model:**
+- Requires `SIGILUM_OWNER_TOKEN` (namespace owner JWT)
+- Only enable if you want to store owner credentials in OpenClaw runtime
+
+**Enable with explicit flag:**
+```bash
+./sigilum openclaw install \
+  --enable-authz-notify true \
+  --owner-token '<namespace-owner-jwt>'
+```
+
+### 2. Skill
+
+#### `sigilum` Skill
+
+Gateway-first provider access workflow.
+
+**Default behavior:**
+- Checks `sigilum-secure-*` gateway connections first for all provider access
+- Uses signed `/mcp/{connection_id}/tools` checks with per-agent key material
+- Auto-resolves `sigilum-subject` from channel sender identity
+- Treats `401/403` as authorization-required (not errors)
+- Avoids asking for direct provider API keys unless gateway path fails
+
+**Gateway-first policy:**
+
+When an agent needs to access a provider (e.g., Linear, Slack, OpenAI):
+
+1. Check if `sigilum-secure-<provider>` connection exists
+2. Run signed capability check via gateway helper
+3. Parse response:
+   - `200` → Access granted, use gateway endpoint
+   - `401/403` → Approval required, show user approval instructions
+   - `404` → Connection not configured, guide user to add it
+   - Other → Surface error and remediation
+
+**Helper commands:**
+
+```bash
+# Check available tools for a connection
+"${HELPER}" tools "sigilum-secure-linear" "${GATEWAY_URL}"
+
+# Call an MCP tool
+"${HELPER}" call "sigilum-secure-linear" "searchIssues" '{"query":"bug"}' "${GATEWAY_URL}"
+
+# Make HTTP proxy request
+"${HELPER}" proxy "sigilum-secure-slack" "POST" "/chat.postMessage" '{"channel":"..."}' "${GATEWAY_URL}"
+```
+
+### 3. Bundled Runtime
+
+The installer bundles a lean Sigilum runtime to:
+- `<agent-workspace>/.sigilum/runtime` (preferred)
+- `<openclaw-home>/skills/sigilum/runtime` (fallback)
+
+This includes:
+- `sigilum` launcher binary
+- Command scripts for gateway operations
+
+## Installation Modes
+
+### Managed Mode (Default)
+
+Connects to hosted Sigilum API and dashboard.
+
+```bash
+./sigilum openclaw install --mode managed
+```
+
+**Defaults:**
+- API: `https://api.sigilum.id`
+- Gateway: `http://localhost:38100` (runs locally)
+- Dashboard: `https://sigilum.id`
+
+**After installation:**
+1. Navigate to `https://sigilum.id`
+2. Sign in and reserve your namespace
+3. Register a passkey for secure access
+
+### OSS-Local Mode
+
+Runs full Sigilum stack locally from source.
+
+```bash
+./sigilum openclaw install --mode oss-local --api-url http://127.0.0.1:8787
+```
+
+**Requires:**
+- Full Sigilum source checkout with `apps/api` directory
+- Local Wrangler setup for Cloudflare Workers
+
+**Defaults:**
+- API: `http://127.0.0.1:8787` (runs locally via Wrangler)
+- Gateway: `http://localhost:38100` (runs locally)
+
+**Auto-start behavior:**
+
+With `--auto-start-sigilum=true` (default), the installer will:
+- Check if local API/gateway are already running
+- Start them automatically if needed
+- Wait for health checks to pass
+- Log output to `~/.openclaw/logs/sigilum-up-<timestamp>.log`
+
+**Passkey setup for seeded namespace:**
+
+<Steps>
+  <Step title="Get your JWT token">
+    The installer auto-issues a namespace owner JWT and saves it to:
+    ```
+    ~/.openclaw/.sigilum/owner-token-<namespace>.jwt
+    ```
+  </Step>
+
+  <Step title="Open passkey setup URL">
+    Navigate to the passkey setup URL shown in installer output:
+    ```
+    http://localhost:5173/bootstrap/passkey?namespace=<your-namespace>
+    ```
+  </Step>
+
+  <Step title="Register passkey">
+    Paste your JWT token and register a passkey, then sign in.
+  </Step>
+</Steps>
+
+## Installer Options
+
+Full command reference:
+
+```bash
+./openclaw/install-openclaw-sigilum.sh [options]
+```
+
+### Core Options
+
+- `--openclaw-home PATH` - OpenClaw installation directory (default: `~/.openclaw`)
+- `--mode MODE` - Installation mode: `managed` or `oss-local`
+- `--namespace VALUE` - Your Sigilum namespace (default: `$USER`)
+- `--gateway-url URL` - Gateway endpoint (default: `http://localhost:38100`)
+- `--api-url URL` - API endpoint (default: `https://api.sigilum.id`)
+
+### Advanced Options
+
+- `--key-root PATH` - Agent key storage path (default: `~/.openclaw/.sigilum/keys`)
+- `--runtime-root PATH` - Bundled runtime destination
+- `--enable-authz-notify BOOL` - Enable authorization notification hook (default: `false`)
+- `--owner-token TOKEN` - Namespace owner JWT (required if `--enable-authz-notify`)
+- `--auto-owner-token BOOL` - Auto-issue JWT in oss-local mode (default: `true`)
+- `--auto-start-sigilum BOOL` - Auto-start local stack (default: `true`)
+- `--interactive` / `--non-interactive` - Control prompt behavior
+- `--force` - Replace existing hooks/skills without backup
+- `--restart` - Restart OpenClaw after installation
+
+## Uninstall
+
+Remove Sigilum integration cleanly:
+
+```bash
+./sigilum openclaw uninstall
+```
+
+This removes:
+- Sigilum hooks from `~/.openclaw/hooks/`
+- Sigilum skills from `~/.openclaw/skills/`
+- Workspace `.sigilum` runtime folder
+- Agent key material from `~/.openclaw/.sigilum/keys/`
+- Sigilum entries from `openclaw.json` (with timestamped backup)
+- CLI defaults from `~/.sigilum/config.env`
+
+## Configuration Files
+
+The installer modifies `openclaw.json` to enable hooks and skills:
+
+```json
+{
+  "hooks": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "sigilum-plugin": {
+          "enabled": true,
+          "env": {
+            "SIGILUM_NAMESPACE": "your-namespace",
+            "SIGILUM_GATEWAY_URL": "http://localhost:38100",
+            "SIGILUM_KEY_ROOT": "/Users/you/.openclaw/.sigilum/keys"
+          }
+        }
+      }
+    }
+  },
+  "skills": {
+    "internal": {
+      "enabled": true,
+      "entries": {
+        "sigilum": {
+          "enabled": true,
+          "env": {
+            "SIGILUM_NAMESPACE": "your-namespace",
+            "SIGILUM_GATEWAY_URL": "http://localhost:38100"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+Each install creates a timestamped backup:
+```
+openclaw.json.bak.<timestamp>
+```
+
+## Key Management
+
+### Agent Keys
+
+Each OpenClaw agent gets a unique Ed25519 keypair:
+
+```
+~/.openclaw/.sigilum/keys/
+  <agent-id>/
+    <fingerprint>.key  (mode 0600)
+    <fingerprint>.pub
+```
+
+**Key properties:**
+- Generated deterministically per agent ID
+- Private keys never leave the OpenClaw runtime
+- Used for signing all gateway requests
+- Each agent's claims are tracked separately
+
+### Key Custody
+
+<Note>
+**Important security boundaries:**
+
+- Agent signing keys: Stay in OpenClaw runtime
+- Provider API credentials: Stay in Sigilum gateway (local BadgerDB)
+- Channel credentials (Slack, Discord, etc.): Still required in OpenClaw for v1
+</Note>
+
+**Provider credentials:**
+- Moved to gateway via connector configuration
+- Never sent to OpenClaw agents
+- Injected by gateway before upstream forwarding
+
+**Channel credentials:**
+- Cannot be fully removed from OpenClaw in v1
+- Core channel adapters need tokens for WebSocket/bootstrap flows
+- Future: Dedicated channel adapter plugins that proxy through gateway
+
+## Subject Resolution
+
+The `sigilum-plugin` hook captures sender identity hints for automatic `sigilum-subject` resolution:
+
+**Slack channels:**
+- Hook captures Slack user ID from `message:received` events
+- Subject resolver attempts `users.info` email lookup (requires `SLACK_BOT_TOKEN` with `users:read` scope)
+- Falls back to Slack user ID if email unavailable
+
+**Other channels:**
+- Uses channel-specific sender identifier
+- Stored in `~/.openclaw/.sigilum/subject-hints.json`
+
+**Manual override:**
+
+Set explicit subject for testing:
+```bash
+export SIGILUM_SUBJECT="user@example.com"
+```
+
+## Approval Flow
+
+When an agent attempts to access a provider without approval:
+
+1. Gateway returns `401` or `403` with `AUTH_CLAIM_REQUIRED`
+2. Helper script parses response and extracts approval fields:
+   - `APPROVAL_REQUIRED=true`
+   - `APPROVAL_NAMESPACE=<namespace>`
+   - `APPROVAL_AGENT_ID=<agent-id>`
+   - `APPROVAL_PUBLIC_KEY=<ed25519:...>`
+   - `APPROVAL_SERVICE=<connection-id>`
+3. Agent shows user the approval instructions
+4. User approves via dashboard
+5. Agent retries request → Gateway allows access
+
+<Info>
+**Never infer "gateway restart bug" from `401/403` responses.** These are expected authorization states managed through the claim approval system.
+</Info>
+
+## Proxy Wiring Examples
+
+### Model Provider
+
+Route OpenAI requests through Sigilum gateway:
+
+```json
+{
+  "models": {
+    "providers": {
+      "sigilum-openai": {
+        "baseUrl": "http://127.0.0.1:38100/proxy/sigilum-secure-openai/v1",
+        "apiKey": "sigilum-provider-proxy-key",
+        "api": "openai-completions",
+        "models": [
+          { "id": "gpt-4", "name": "GPT-4" }
+        ]
+      }
+    }
+  }
+}
+```
+
+### Channel Proxy
+
+Some channels support proxy configuration:
+
+```json
+{
+  "channels": {
+    "telegram": {
+      "proxy": "http://localhost:38100/proxy/telegram-proxy"
+    }
+  }
+}
+```
+
+## CLI Commands
+
+### Status Check
+
+```bash
+./sigilum openclaw status
+```
+
+Shows:
+- Installed hooks and skills
+- Active configuration
+- Key material locations
+
+### Token Management
+
+Refresh local namespace owner token:
+
+```bash
+./sigilum auth refresh --mode oss-local --namespace johndee
+```
+
+Login with token from stdin:
+
+```bash
+./sigilum auth login --mode managed --namespace johndee --owner-token-stdin
+```
+
+Show current token:
+
+```bash
+./sigilum auth show --namespace johndee
+```
+
+## Troubleshooting
+
+### OpenClaw doesn't see new hooks/skills
+
+OpenClaw usually hot-reloads config, but if changes don't appear:
+
+```bash
+openclaw gateway restart
+```
+
+### Gateway connection failures
+
+Check that local gateway is running:
+
+```bash
+curl http://localhost:38100/health
+```
+
+If not running, start it:
+
+```bash
+sigilum up
+```
+
+### Approval requests not working
+
+Verify agent keys were created:
+
+```bash
+ls ~/.openclaw/.sigilum/keys/
+```
+
+Check gateway can reach API:
+
+```bash
+curl http://localhost:38100/health/ready
+```
+
+### Subject resolution fails
+
+For Slack email lookups, ensure bot token has correct scopes:
+
+```bash
+export SLACK_BOT_TOKEN="xoxb-..."
+# Token needs users:read scope
+```
+
+Or set subject explicitly:
+
+```bash
+export SIGILUM_SUBJECT="user@example.com"
+```
+
+## Security Contract
+
+<Warning>
+**Important security guarantees:**
+
+- No legacy `X-Sigilum-*` header workflow in new integration assets
+- All hooks are source-controlled (no hidden logic)
+- Owner-token notification hook is **opt-in** and disabled by default
+- Agent private keys never transmitted over network
+- All gateway requests signed with RFC 9421
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Provider Connectors" icon="plug" href="/integrations/providers">
+    Configure HTTP and MCP provider connections through the gateway
+  </Card>
+  <Card title="Gateway Configuration" icon="server" href="/components/gateway">
+    Advanced gateway settings and environment variables
+  </Card>
+</CardGroup>

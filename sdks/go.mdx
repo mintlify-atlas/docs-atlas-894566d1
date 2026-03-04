@@ -1,0 +1,534 @@
+---
+title: Go SDK
+description: Go SDK for local-first agent identity and signed API requests
+---
+
+## Installation
+
+```bash
+go get sigilum.local/sdk-go/sigilum
+```
+
+## Requirements
+
+- Go 1.23
+
+## Quick Start
+
+### 1. Initialize Identity
+
+Create a local agent identity once:
+
+```bash
+sigilum init johndee
+```
+
+### 2. Certify Your Agent
+
+Create identity bindings for signed requests:
+
+```go
+package main
+
+import (
+	"context"
+	"log"
+
+	"sigilum.local/sdk-go/sigilum"
+)
+
+func main() {
+	// Initialize identity (one-time setup)
+	result, _ := sigilum.InitIdentity(sigilum.InitIdentityOptions{
+		Namespace: "alice",
+	})
+	_ = result
+
+	// Create bindings for signed requests
+	bindings, _ := sigilum.Certify(sigilum.CertifyOptions{
+		Namespace: "alice",
+	})
+
+	resp, err := bindings.Do(context.Background(), sigilum.SignRequestInput{
+		URL:    "/v1/namespaces/" + bindings.Namespace,
+		Method: "GET",
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+}
+```
+
+### 3. Send Signed Requests
+
+```go
+package main
+
+import (
+	"context"
+	"io"
+	"log"
+
+	"sigilum.local/sdk-go/sigilum"
+)
+
+func main() {
+	namespace := "alice"
+	bindings, err := sigilum.Certify(sigilum.CertifyOptions{
+		Namespace: namespace,
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	resp, err := bindings.Do(context.Background(), sigilum.SignRequestInput{
+		URL:     "/v1/namespaces/" + namespace,
+		Method:  "GET",
+		Subject: "customer-12345", // optional per-request subject override
+	})
+	if err != nil {
+		log.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	body, _ := io.ReadAll(resp.Body)
+	log.Printf("status=%d\n%s", resp.StatusCode, body)
+}
+```
+
+## API Reference
+
+### `Certify(options)`
+
+Creates Sigilum identity bindings for signed requests.
+
+**Parameters:**
+
+- `options: CertifyOptions`
+  - `Namespace: string` - Namespace to load (defaults to first found)
+  - `HomeDir: string` - Custom identity directory (defaults to `~/.sigilum`)
+  - `APIBaseURL: string` - API base URL (defaults to `https://api.sigilum.id` or `SIGILUM_API_URL`)
+  - `HTTPClient: *http.Client` - Custom HTTP client (defaults to `http.DefaultClient`)
+
+**Returns:** `(*SigilumBindings, error)`
+
+**Example:**
+
+```go
+bindings, err := sigilum.Certify(sigilum.CertifyOptions{
+	Namespace:  "alice",
+	APIBaseURL: "https://api.sigilum.id",
+})
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+### `SigilumBindings`
+
+Bindings returned by `Certify()`:
+
+#### Fields
+
+- `Namespace: string` - Agent's namespace
+- `DID: string` - Agent's DID (for example: `did:sigilum:alice:default#agent-abc123#alice`)
+- `KeyID: string` - Agent's key ID
+- `PublicKey: string` - Agent's Ed25519 public key (`ed25519:...`)
+- `Certificate: SigilumCertificate` - Agent's certificate with proof
+- `APIBaseURL: string` - Resolved API base URL
+- `HTTPClient: *http.Client` - HTTP client for requests
+
+#### Methods
+
+##### `Sign(input)`
+
+Signs a request without sending it.
+
+**Parameters:**
+
+- `input: SignRequestInput`
+  - `URL: string` - Request URL (absolute or relative) (required)
+  - `Method: string` - HTTP method (defaults to `GET`)
+  - `Headers: map[string]string` - Request headers
+  - `Body: []byte` - Request body
+  - `Subject: string` - Override subject for this request
+  - `Created: int64` - Unix timestamp for signature (defaults to now)
+  - `Nonce: string` - Custom nonce (defaults to random UUID)
+
+**Returns:** `(SignedRequest, error)`
+
+**Example:**
+
+```go
+signed, err := bindings.Sign(sigilum.SignRequestInput{
+	URL:    "/v1/namespaces/alice",
+	Method: "GET",
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+log.Println(signed.Headers["signature-input"])
+log.Println(signed.Headers["signature"])
+```
+
+##### `Do(ctx, input)`
+
+Signs and sends a request.
+
+**Parameters:**
+
+- `ctx: context.Context` - Request context (required)
+- `input: SignRequestInput` - Request details (required)
+
+**Returns:** `(*http.Response, error)`
+
+**Example:**
+
+```go
+// Simple GET
+resp, err := bindings.Do(context.Background(), sigilum.SignRequestInput{
+	URL:    "/v1/namespaces/alice",
+	Method: "GET",
+})
+if err != nil {
+	log.Fatal(err)
+}
+defer resp.Body.Close()
+
+// POST with body and custom subject
+import "encoding/json"
+
+bodyData, _ := json.Marshal(map[string]string{"claim": "value"})
+resp, err := bindings.Do(context.Background(), sigilum.SignRequestInput{
+	URL:     "/claims",
+	Method:  "POST",
+	Subject: "customer-12345",
+	Headers: map[string]string{
+		"content-type": "application/json",
+	},
+	Body: bodyData,
+})
+```
+
+##### `Request(ctx, path, method, headers, body)`
+
+Convenience method that resolves paths relative to the namespace API base.
+
+**Parameters:**
+
+- `ctx: context.Context` - Request context (required)
+- `path: string` - Path relative to `/v1/namespaces/{namespace}/` (required)
+- `method: string` - HTTP method (required)
+- `headers: map[string]string` - Request headers
+- `body: []byte` - Request body
+
+**Returns:** `(*http.Response, error)`
+
+**Example:**
+
+```go
+// Automatically resolves to /v1/namespaces/alice/claims
+resp, err := bindings.Request(
+	context.Background(),
+	"/claims",
+	"POST",
+	map[string]string{"content-type": "application/json"},
+	bodyData,
+)
+```
+
+### `InitIdentity(options)`
+
+Programmatically initialize a new agent identity.
+
+**Parameters:**
+
+- `options: InitIdentityOptions`
+  - `Namespace: string` - Namespace for this identity (required)
+  - `HomeDir: string` - Custom identity directory
+  - `Force: bool` - Overwrite existing identity
+
+**Returns:** `(InitIdentityResult, error)`
+
+**Example:**
+
+```go
+result, err := sigilum.InitIdentity(sigilum.InitIdentityOptions{
+	Namespace: "alice",
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+log.Println(result.DID)
+log.Println(result.PublicKey)
+```
+
+### `LoadIdentity(options)`
+
+Load an existing agent identity.
+
+**Parameters:**
+
+- `options: LoadIdentityOptions`
+  - `Namespace: string` - Namespace to load (defaults to first found)
+  - `HomeDir: string` - Custom identity directory
+
+**Returns:** `(SigilumIdentity, error)`
+
+**Example:**
+
+```go
+identity, err := sigilum.LoadIdentity(sigilum.LoadIdentityOptions{
+	Namespace: "alice",
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+log.Println(identity.Namespace)
+log.Println(identity.PublicKey)
+```
+
+### `SignHTTPRequest(identity, input)`
+
+Low-level signing function.
+
+**Parameters:**
+
+- `identity: SigilumIdentity` - Loaded identity (required)
+- `input: SignRequestInput` - Request details (required)
+
+**Returns:** `(SignedRequest, error)`
+
+**Example:**
+
+```go
+identity, _ := sigilum.LoadIdentity(sigilum.LoadIdentityOptions{
+	Namespace: "alice",
+})
+
+signed, err := sigilum.SignHTTPRequest(identity, sigilum.SignRequestInput{
+	URL:    "https://api.sigilum.id/v1/namespaces/alice",
+	Method: "GET",
+})
+if err != nil {
+	log.Fatal(err)
+}
+
+log.Println(signed.Headers["signature"])
+```
+
+### `VerifyHTTPSignature(input)`
+
+Verify an incoming signed request (server-side).
+
+**Parameters:**
+
+- `input: VerifySignatureInput`
+  - `URL: string` - Request URL (required)
+  - `Method: string` - HTTP method (required)
+  - `Headers: map[string]string` - Request headers (required)
+  - `Body: []byte` - Request body
+  - `ExpectedNamespace: string` - Require specific namespace
+  - `ExpectedSubject: string` - Require specific subject
+  - `MaxAgeSeconds: int64` - Maximum signature age
+  - `NowUnix: int64` - Current Unix timestamp (defaults to now)
+  - `SeenNonces: map[string]struct{}` - Nonce map for replay detection
+
+**Returns:** `VerifySignatureResult`
+
+**Example:**
+
+```go
+seenNonces := make(map[string]struct{})
+
+result := sigilum.VerifyHTTPSignature(sigilum.VerifySignatureInput{
+	URL:               req.URL.String(),
+	Method:            req.Method,
+	Headers:           headers,
+	Body:              body,
+	ExpectedNamespace: "alice",
+	MaxAgeSeconds:     300, // 5 minutes
+	SeenNonces:        seenNonces,
+})
+
+if !result.Valid {
+	log.Printf("Signature verification failed: %s", result.Code)
+	log.Println(result.Reason)
+} else {
+	log.Printf("Verified request from namespace: %s", result.Namespace)
+	log.Printf("Subject: %s", result.Subject)
+}
+```
+
+### `RetryWithBackoff(operation, options)`
+
+Retry helper with exponential backoff for idempotent operations.
+
+**Parameters:**
+
+- `operation: func() (T, error)` - Operation to retry (required)
+- `options: RetryOptions[T]`
+  - `Idempotent: bool` - **Required**. Must be `true` when `Attempts > 1`
+  - `Attempts: int` - Max attempts (defaults to 3)
+  - `BaseDelaySeconds: float64` - Initial delay (defaults to 0.1)
+  - `MaxDelaySeconds: float64` - Maximum delay (defaults to 2.0)
+  - `JitterRatio: float64` - Jitter ratio (defaults to 0.2)
+  - `ShouldRetryResult: func(T) bool` - Retry predicate for results
+  - `ShouldRetryError: func(error) bool` - Retry predicate for errors
+  - `Sleep: func(float64)` - Custom sleep implementation
+
+**Returns:** `(T, error)`
+
+**Example:**
+
+```go
+resp, err := sigilum.RetryWithBackoff(
+	func() (*http.Response, error) {
+		return bindings.Do(context.Background(), sigilum.SignRequestInput{
+			URL:    "/v1/namespaces/alice",
+			Method: "GET",
+		})
+	},
+	sigilum.RetryOptions[*http.Response]{
+		Idempotent: true,
+		Attempts:   3,
+		ShouldRetryResult: func(r *http.Response) bool {
+			return sigilum.ShouldRetryHTTPStatus(r.StatusCode)
+		},
+	},
+)
+```
+
+### `ShouldRetryHTTPStatus(status)`
+
+Helper that returns `true` for retryable HTTP status codes.
+
+**Retryable statuses:** 429, 502, 503, 504
+
+**Example:**
+
+```go
+sigilum.ShouldRetryHTTPStatus(429) // true
+sigilum.ShouldRetryHTTPStatus(500) // false
+sigilum.ShouldRetryHTTPStatus(200) // false
+```
+
+## Subject Override
+
+Override the `sigilum-subject` header for a specific request:
+
+```go
+// Override subject for this request (for example, the end user ID)
+resp, err := bindings.Do(context.Background(), sigilum.SignRequestInput{
+	URL:     "/claims",
+	Method:  "POST",
+	Subject: "customer-12345",
+})
+```
+
+If `Subject` is omitted, the SDK defaults to the signer's namespace.
+
+## Identity Model
+
+**Hierarchy:** `namespace -> service -> agent -> subject`
+
+**DID Format:** `did:sigilum:{namespace}:{service}#{agent}#{subject}`
+
+**Example:** `did:sigilum:mfs:narmi#davis-agent#customer-12345`
+
+## Error Codes
+
+Signature verification failures return deterministic codes:
+
+| Code | Constant | Meaning |
+| --- | --- | --- |
+| `SIG_CONTENT_DIGEST_MISMATCH` | `verifyCodeContentDigestMismatch` | Request body tampered |
+| `SIG_VERIFICATION_FAILED` | `verifyCodeVerificationFailed` | Signature cryptographically invalid |
+| `SIG_CERT_INVALID` | `verifyCodeCertInvalid` | Agent certificate proof failed |
+| `SIG_TIMESTAMP_OUT_OF_RANGE` | `verifyCodeTimestampOutOfRange` | Signature expired or not yet valid |
+| `SIG_REPLAY_DETECTED` | `verifyCodeReplayDetected` | Nonce already seen (replay attack) |
+| `SIG_NAMESPACE_MISMATCH` | `verifyCodeNamespaceMismatch` | Namespace header doesn't match cert |
+| `SIG_SUBJECT_MISSING` | `verifyCodeSubjectMissing` | Required subject header missing |
+| `SIG_MISSING_SIGNATURE_HEADERS` | `verifyCodeMissingSignatureHeaders` | Missing Signature-Input or Signature |
+| `SIG_ALGORITHM_UNSUPPORTED` | `verifyCodeAlgorithmUnsupported` | Unsupported signature algorithm |
+
+## Authentication Note
+
+Signed headers prove agent identity. Some endpoints also require additional auth:
+
+**Example:** `POST /v1/claims` requires `Authorization: Bearer <service_api_key>`
+
+```go
+resp, err := bindings.Do(context.Background(), sigilum.SignRequestInput{
+	URL:    "/v1/claims",
+	Method: "POST",
+	Headers: map[string]string{
+		"authorization": "Bearer " + serviceApiKey,
+		"content-type":  "application/json",
+	},
+	Body: bodyData,
+})
+```
+
+## Advanced Usage
+
+### Custom HTTP Client
+
+```go
+import (
+	"net/http"
+	"time"
+)
+
+customClient := &http.Client{
+	Timeout: 30 * time.Second,
+}
+
+bindings, err := sigilum.Certify(sigilum.CertifyOptions{
+	Namespace:  "alice",
+	HTTPClient: customClient,
+})
+```
+
+### Certificate Encoding/Decoding
+
+```go
+encoded, err := sigilum.EncodeCertificateHeader(identity.Certificate)
+if err != nil {
+	log.Fatal(err)
+}
+
+certificate, err := sigilum.DecodeCertificateHeader(encoded)
+if err != nil {
+	log.Fatal(err)
+}
+```
+
+### Context Cancellation
+
+```go
+import "time"
+
+ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+defer cancel()
+
+resp, err := bindings.Do(ctx, sigilum.SignRequestInput{
+	URL:    "/v1/namespaces/alice",
+	Method: "GET",
+})
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SDK Overview" icon="layer-group" href="/sdks/overview">
+    Learn about the common SDK contract
+  </Card>
+  <Card title="TypeScript SDK" icon="node-js" href="/sdks/typescript">
+    View the TypeScript SDK documentation
+  </Card>
+</CardGroup>

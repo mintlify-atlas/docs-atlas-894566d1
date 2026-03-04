@@ -1,0 +1,324 @@
+---
+title: DID Method Specification
+description: did:sigilum method for verifiable AI agent identity
+---
+
+## Overview
+
+`did:sigilum` is a DID method for verifiable AI-agent identity under a human-owned namespace. The method binds a namespace owner, approved Ed25519 agent public keys, and service authorizations to produce a DID Document that relying services can verify.
+
+**Status**: Draft  
+**Method name**: `sigilum`  
+**Primary network**: Base L2 (or compatible EVM deployment)  
+**Reference contract**: `contracts/src/SigilumRegistry.sol`
+
+## Method-Specific Identifier
+
+### Syntax
+
+Base DID form:
+
+```text
+did:sigilum:<namespace>
+```
+
+**Namespace requirements:**
+- MUST be 3-64 characters
+- Allowed characters: `a-z`, `A-Z`, `0-9`, `-`
+- MUST begin and end with an alphanumeric character
+
+**Optional DID URL fragment** for key/service references:
+
+```text
+did:sigilum:<namespace>#<fragment>
+```
+
+**Example:**
+
+```text
+did:sigilum:prashanth-openai#agent123
+```
+
+### Identity Hierarchy Format
+
+For audit records and fine-grained authorization, the protocol uses an extended fragment format:
+
+```text
+did:sigilum:{namespace}:{service}#{agent}#{subject}
+```
+
+**Example:**
+
+```text
+did:sigilum:mfs:narmi#davis-agent#customer-12345
+```
+
+This represents:
+- **Namespace**: `mfs` (the owning entity)
+- **Service**: `narmi` (the authorized service)
+- **Agent**: `davis-agent` (the specific agent instance)
+- **Subject**: `customer-12345` (the authenticated principal)
+
+## DID Document Model
+
+Resolver output uses W3C DID Core JSON-LD context:
+
+```json
+{
+  "@context": "https://www.w3.org/ns/did/v1",
+  "id": "did:sigilum:prashanth-openai",
+  "verificationMethod": [
+    {
+      "id": "did:sigilum:prashanth-openai#key-1",
+      "type": "Ed25519VerificationKey2020",
+      "controller": "did:sigilum:prashanth-openai",
+      "publicKeyMultibase": "z6Mkf5rG..."
+    }
+  ],
+  "authentication": [
+    "did:sigilum:prashanth-openai#key-1"
+  ],
+  "assertionMethod": [
+    "did:sigilum:prashanth-openai#key-1"
+  ],
+  "service": [
+    {
+      "id": "did:sigilum:prashanth-openai#agent-runtime-openai",
+      "type": "AgentEndpoint",
+      "serviceEndpoint": "https://api.sigilum.id/v1/verify?namespace=prashanth-openai&service=openai"
+    }
+  ]
+}
+```
+
+### Verification Method
+
+Each verification method includes:
+- **id**: DID URL with fragment identifying the key
+- **type**: `Ed25519VerificationKey2020` (only supported key type)
+- **controller**: The DID that controls this key
+- **publicKeyMultibase**: Ed25519 public key in multibase format
+
+### Authentication and Assertion
+
+Verification methods are referenced in:
+- **authentication**: Keys used for authentication
+- **assertionMethod**: Keys used for signing assertions
+
+### Service Endpoints
+
+Service entries define authorized agent endpoints:
+- **id**: DID URL with fragment identifying the service
+- **type**: `AgentEndpoint` (Sigilum-specific service type)
+- **serviceEndpoint**: URL for verification and service discovery
+
+## Method Operations (CRUD)
+
+`did:sigilum` operations are backed by `SigilumRegistry` state transitions and mirrored API state.
+
+### Create
+
+**Create namespace DID:**
+
+```solidity
+registerNamespace(name)
+```
+
+Result: `did:sigilum:<name>` becomes resolvable
+
+**Create authorized verification material:**
+
+Two-step contract flow:
+```solidity
+submitClaim(namespace, publicKey, service, agentIP)
+approveClaim(claimId)
+```
+
+Single-step API mode:
+```solidity
+approveClaimDirect(namespace, publicKey, service, agentIP)
+```
+
+### Read (Resolve)
+
+Resolve DID document:
+
+**DID Document endpoint:**
+```http
+GET /.well-known/did/{did}
+```
+- Content type: `application/did+ld+json`
+- Returns DID Document only
+
+**DID Resolution endpoint:**
+```http
+GET /1.0/identifiers/{did}
+```
+- Content type: `application/ld+json;profile="https://w3id.org/did-resolution"`
+- Returns resolution envelope with:
+  - `@context`: `https://w3id.org/did-resolution/v1`
+  - `didDocument`
+  - `didDocumentMetadata`
+  - `didResolutionMetadata`
+
+**Resolver behavior:**
+1. Reads namespace owner state
+2. Reads approved claims (`status = approved`)
+3. Converts Ed25519 keys to `publicKeyMultibase` format
+4. Emits DID Document with metadata
+
+**Error mapping:**
+- `invalidDid` → HTTP `400`
+- `notFound` → HTTP `404`
+- `internalError` → HTTP `500`
+
+### Update
+
+Update DID control/authorization state:
+
+**Transfer control:**
+```solidity
+transferNamespace(name, newOwner)
+```
+
+**Add/replace approved key-service bindings:**
+```solidity
+approveClaim(...)
+approveClaimDirect(...)
+```
+
+**Remove authorization:**
+```solidity
+revokeClaim(claimId)
+revokeClaimDirect(namespace, publicKey, service)
+```
+
+These updates change resolver output (keys, services, authentication relationships).
+
+### Deactivate
+
+Method-level deactivation is represented by:
+1. Removal of namespace-owner control-plane record
+2. Revocation of all active approvals
+
+**Resolver semantics:**
+
+If historical authorization data exists but active namespace-owner record is absent:
+- `didDocumentMetadata.deactivated = true`
+- DID remains identifiable, but active verification methods are empty
+
+## Contract Interface
+
+Core methods in `SigilumRegistry`:
+
+| Method | Purpose |
+|--------|--------|
+| `registerNamespace` | Create new namespace DID |
+| `transferNamespace` | Transfer namespace ownership |
+| `submitClaim` | Submit agent key for approval |
+| `approveClaim` | Approve pending claim |
+| `rejectClaim` | Reject pending claim |
+| `revokeClaim` | Revoke approved claim |
+| `approveClaimDirect` | Single-step approval (API mode) |
+| `revokeClaimDirect` | Single-step revocation |
+| `isAuthorized` | Check authorization status |
+
+These are the canonical state transitions for DID creation and key/service authorization updates.
+
+## Resolution Examples
+
+### Example 1: Basic Resolution
+
+**Request:**
+```http
+GET /.well-known/did/did:sigilum:fixture-alice
+```
+
+**Response:**
+```json
+{
+  "@context": "https://www.w3.org/ns/did/v1",
+  "id": "did:sigilum:fixture-alice",
+  "verificationMethod": [
+    {
+      "id": "did:sigilum:fixture-alice#ed25519-99fb00dc16ee555a",
+      "type": "Ed25519VerificationKey2020",
+      "controller": "did:sigilum:fixture-alice",
+      "publicKeyMultibase": "z6MkjRag..."
+    }
+  ],
+  "authentication": [
+    "did:sigilum:fixture-alice#ed25519-99fb00dc16ee555a"
+  ],
+  "assertionMethod": [
+    "did:sigilum:fixture-alice#ed25519-99fb00dc16ee555a"
+  ]
+}
+```
+
+### Example 2: Resolution with Metadata
+
+**Request:**
+```http
+GET /1.0/identifiers/did:sigilum:fixture-alice
+```
+
+**Response:**
+```json
+{
+  "@context": "https://w3id.org/did-resolution/v1",
+  "didDocument": {
+    "@context": "https://www.w3.org/ns/did/v1",
+    "id": "did:sigilum:fixture-alice",
+    "verificationMethod": [ ]
+  },
+  "didDocumentMetadata": {
+    "created": "2026-02-20T18:04:26Z",
+    "updated": "2026-02-20T18:04:26Z"
+  },
+  "didResolutionMetadata": {
+    "contentType": "application/did+ld+json"
+  }
+}
+```
+
+## Security Considerations
+
+- **Namespace ownership** controls approval and revocation rights
+- **Approved key lookups** are deterministic (`namespace + publicKey + service`)
+- **Resolver output** should be consumed with cache TTL and replay-safe request signing at runtime
+- **Private keys** are never published in DID Documents
+- **Deactivation** is explicit through namespace removal and claim revocation
+
+## Privacy Considerations
+
+- DID Documents expose only **public verification material** and service authorization bindings
+- **Sensitive secrets** remain in gateway-local encrypted storage
+- **Private data** is not part of DID resolution output
+- **Subject identifiers** in audit records are managed by namespace owners
+
+## Conformance Notes
+
+This method conforms to:
+- **W3C DID Core** document shape
+- **DID Resolution** endpoint envelope format
+- **Ed25519VerificationKey2020** key type specification
+
+Method updates are reflected through Sigilum registry lifecycle operations and resolver output.
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Signing Profile" icon="signature" href="/protocol/signing-profile">
+    RFC 9421 HTTP message signatures
+  </Card>
+  <Card title="Security" icon="shield" href="/protocol/security">
+    Security considerations and best practices
+  </Card>
+  <Card title="Protocol Overview" icon="book" href="/protocol/overview">
+    High-level protocol documentation
+  </Card>
+  <Card title="Security" icon="shield-halved" href="/protocol/security">
+    Security considerations and best practices
+  </Card>
+</CardGroup>

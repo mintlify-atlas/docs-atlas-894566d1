@@ -1,0 +1,444 @@
+---
+title: TypeScript SDK
+description: TypeScript/Node.js SDK for local-first agent identity and signed API requests
+---
+
+## Installation
+
+<CodeGroup>
+```bash pnpm
+pnpm add @sigilum/sdk
+```
+
+```bash npm
+npm install @sigilum/sdk
+```
+
+```bash yarn
+yarn add @sigilum/sdk
+```
+</CodeGroup>
+
+## Requirements
+
+- Node.js >= 20
+
+## Quick Start
+
+### 1. Initialize Identity
+
+Create a local agent identity once:
+
+```bash
+sigilum init johndee
+```
+
+For automation, use machine-readable output:
+
+```bash
+sigilum init johndee --json
+sigilum list --json
+```
+
+### 2. Certify Your Agent
+
+Attach identity and signed request helpers to any object:
+
+```typescript
+import * as sigilum from "@sigilum/sdk";
+
+const agent = sigilum.certify({});
+```
+
+This does not wrap your agent class—it attaches a `.sigilum` property with identity metadata and request helpers.
+
+### 3. Send Signed Requests
+
+```typescript
+import * as sigilum from "@sigilum/sdk";
+
+const agent = sigilum.certify({});
+
+const response = await agent.sigilum.fetch(`/v1/namespaces/${agent.sigilum.namespace}`, {
+  method: "GET",
+});
+
+const data = await response.json();
+console.log(data);
+```
+
+## API Reference
+
+### `certify(agent, options?)`
+
+Attaches Sigilum identity bindings to an agent object.
+
+**Parameters:**
+
+- `agent: object` - Any object to certify (required)
+- `options?: CertifyOptions`
+  - `namespace?: string` - Namespace to load (defaults to first found)
+  - `homeDir?: string` - Custom identity directory (defaults to `~/.sigilum`)
+  - `apiBaseUrl?: string` - API base URL (defaults to `https://api.sigilum.id` or `SIGILUM_API_URL`)
+  - `fetchImpl?: typeof fetch` - Custom fetch implementation
+
+**Returns:** `CertifiedAgent<T>` - The agent with `.sigilum` bindings attached
+
+**Example:**
+
+```typescript
+const agent = sigilum.certify(createAgent(...), {
+  namespace: "alice",
+  apiBaseUrl: "https://api.sigilum.id",
+});
+```
+
+### `agent.sigilum`
+
+Bindings attached to certified agents:
+
+#### Properties
+
+- `namespace: string` - Agent's namespace
+- `did: string` - Agent's DID (for example: `did:sigilum:alice:default#agent-abc123#alice`)
+- `keyId: string` - Agent's key ID
+- `publicKey: string` - Agent's Ed25519 public key (`ed25519:...`)
+- `certificate: SigilumCertificate` - Agent's certificate with proof
+- `apiBaseUrl: string` - Resolved API base URL
+
+#### Methods
+
+##### `sign(request)`
+
+Signs a request without sending it.
+
+**Parameters:**
+
+- `request: SignRequestInput`
+  - `url: string | URL` - Request URL (absolute or relative)
+  - `method?: string` - HTTP method (defaults to `GET`)
+  - `headers?: HeaderInput` - Request headers
+  - `body?: string | Uint8Array | ArrayBuffer | null` - Request body
+  - `subject?: string` - Override subject for this request
+  - `created?: number` - Unix timestamp for signature (defaults to now)
+  - `nonce?: string` - Custom nonce (defaults to random UUID)
+
+**Returns:** `SignedRequest`
+
+**Example:**
+
+```typescript
+const signed = agent.sigilum.sign({
+  url: "/v1/namespaces/alice",
+  method: "GET",
+});
+
+console.log(signed.headers.get("signature-input"));
+console.log(signed.headers.get("signature"));
+```
+
+##### `fetch(input, init?)`
+
+Signs and sends a request using the Fetch API.
+
+**Parameters:**
+
+- `input: string | URL | Request` - Request URL or Request object
+- `init?: SigilumRequestOptions` - Request options (extends `RequestInit`)
+  - `subject?: string` - Override subject for this request
+  - ...all standard `RequestInit` options
+
+**Returns:** `Promise<Response>`
+
+**Example:**
+
+```typescript
+// Simple GET
+const response = await agent.sigilum.fetch(`/v1/namespaces/${agent.sigilum.namespace}`);
+
+// POST with body and custom subject
+const response = await agent.sigilum.fetch("/claims", {
+  method: "POST",
+  subject: "customer-12345",
+  headers: {
+    "content-type": "application/json",
+  },
+  body: JSON.stringify({ claim: "value" }),
+});
+```
+
+##### `request(path, init?)`
+
+Convenience method that resolves paths relative to the namespace API base.
+
+**Parameters:**
+
+- `path: string` - Path relative to `/v1/namespaces/{namespace}/`
+- `init?: SigilumRequestOptions` - Request options
+
+**Returns:** `Promise<Response>`
+
+**Example:**
+
+```typescript
+// Automatically resolves to /v1/namespaces/alice/claims
+const response = await agent.sigilum.request("/claims", {
+  method: "POST",
+  subject: "customer-12345",
+});
+```
+
+### `initIdentity(options)`
+
+Programmatically initialize a new agent identity.
+
+**Parameters:**
+
+- `options: InitIdentityOptions`
+  - `namespace: string` - Namespace for this identity (required)
+  - `homeDir?: string` - Custom identity directory
+  - `force?: boolean` - Overwrite existing identity
+
+**Returns:** `InitIdentityResult`
+
+**Example:**
+
+```typescript
+import { initIdentity } from "@sigilum/sdk";
+
+const result = initIdentity({ namespace: "alice" });
+console.log(result.did);
+console.log(result.publicKey);
+```
+
+### `loadIdentity(options?)`
+
+Load an existing agent identity.
+
+**Parameters:**
+
+- `options?: LoadIdentityOptions`
+  - `namespace?: string` - Namespace to load (defaults to first found)
+  - `homeDir?: string` - Custom identity directory
+
+**Returns:** `SigilumIdentity`
+
+**Example:**
+
+```typescript
+import { loadIdentity } from "@sigilum/sdk";
+
+const identity = loadIdentity({ namespace: "alice" });
+console.log(identity.namespace);
+console.log(identity.publicKey);
+```
+
+### `verifyHttpSignature(input)`
+
+Verify an incoming signed request (server-side).
+
+**Parameters:**
+
+- `input: VerifySignatureInput`
+  - `url: string | URL` - Request URL
+  - `method: string` - HTTP method
+  - `headers: HeaderInput` - Request headers
+  - `body?: string | Uint8Array | ArrayBuffer | null` - Request body
+  - `expectedNamespace?: string` - Require specific namespace
+  - `expectedSubject?: string` - Require specific subject
+  - `strict?: object` - Replay/timestamp strictness
+    - `maxAgeSeconds?: number` - Maximum signature age
+    - `now?: number` - Current Unix timestamp (defaults to now)
+    - `nonceStore?: Set<string>` - Nonce set for replay detection
+
+**Returns:** `VerifySignatureResult`
+
+**Example:**
+
+```typescript
+import { verifyHttpSignature } from "@sigilum/sdk";
+
+const nonceStore = new Set<string>();
+
+const result = verifyHttpSignature({
+  url: request.url,
+  method: request.method,
+  headers: request.headers,
+  body: await request.text(),
+  expectedNamespace: "alice",
+  strict: {
+    maxAgeSeconds: 300, // 5 minutes
+    nonceStore,
+  },
+});
+
+if (!result.valid) {
+  console.error(`Signature verification failed: ${result.code}`);
+  console.error(result.reason);
+  return;
+}
+
+console.log(`Verified request from namespace: ${result.namespace}`);
+console.log(`Subject: ${result.subject}`);
+```
+
+### `retryWithBackoff(operation, options)`
+
+Retry helper with exponential backoff for idempotent operations.
+
+**Parameters:**
+
+- `operation: () => Promise<T>` - Async operation to retry
+- `options: RetryWithBackoffOptions<T>`
+  - `idempotent: boolean` - **Required**. Must be `true` when `attempts > 1`
+  - `attempts?: number` - Max attempts (defaults to 3)
+  - `baseDelayMs?: number` - Initial delay (defaults to 100ms)
+  - `maxDelayMs?: number` - Maximum delay (defaults to 2000ms)
+  - `jitterRatio?: number` - Jitter ratio (defaults to 0.2)
+  - `shouldRetryResult?: (result: T) => boolean` - Retry predicate for results
+  - `shouldRetryError?: (error: unknown) => boolean` - Retry predicate for errors
+  - `sleep?: (delayMs: number) => Promise<void>` - Custom sleep implementation
+
+**Returns:** `Promise<T>`
+
+**Example:**
+
+```typescript
+import { retryWithBackoff, shouldRetryHttpStatus } from "@sigilum/sdk";
+
+const response = await retryWithBackoff(
+  async () => {
+    return agent.sigilum.fetch("/v1/namespaces/alice", { method: "GET" });
+  },
+  {
+    idempotent: true,
+    attempts: 3,
+    shouldRetryResult: (res) => shouldRetryHttpStatus(res.status),
+  },
+);
+```
+
+### `shouldRetryHttpStatus(status)`
+
+Helper that returns `true` for retryable HTTP status codes.
+
+**Retryable statuses:** 429, 502, 503, 504
+
+**Example:**
+
+```typescript
+import { shouldRetryHttpStatus } from "@sigilum/sdk";
+
+shouldRetryHttpStatus(429); // true
+shouldRetryHttpStatus(500); // false
+shouldRetryHttpStatus(200); // false
+```
+
+## Subject Override
+
+Override the `sigilum-subject` header for a specific request:
+
+```typescript
+// Override subject for this request (for example, the end user ID)
+await agent.sigilum.fetch("/claims", {
+  method: "POST",
+  subject: "customer-12345",
+});
+
+// Or using request()
+await agent.sigilum.request("/claims", {
+  method: "POST",
+  subject: "customer-12345",
+});
+```
+
+If `subject` is omitted, the SDK defaults to the signer's namespace.
+
+## Identity Model
+
+**Hierarchy:** `namespace -> service -> agent -> subject`
+
+**DID Format:** `did:sigilum:{namespace}:{service}#{agent}#{subject}`
+
+**Example:** `did:sigilum:mfs:narmi#davis-agent#customer-12345`
+
+## Error Codes
+
+Signature verification failures return deterministic codes:
+
+| Code | Meaning |
+| --- | --- |
+| `SIG_CONTENT_DIGEST_MISMATCH` | Request body tampered |
+| `SIG_VERIFICATION_FAILED` | Signature cryptographically invalid |
+| `SIG_CERT_INVALID` | Agent certificate proof failed |
+| `SIG_TIMESTAMP_OUT_OF_RANGE` | Signature expired or not yet valid |
+| `SIG_REPLAY_DETECTED` | Nonce already seen (replay attack) |
+| `SIG_NAMESPACE_MISMATCH` | Namespace header doesn't match cert |
+| `SIG_SUBJECT_MISSING` | Required subject header missing |
+| `SIG_MISSING_SIGNATURE_HEADERS` | Missing Signature-Input or Signature |
+| `SIG_ALGORITHM_UNSUPPORTED` | Unsupported signature algorithm |
+
+## Authentication Note
+
+Signed headers prove agent identity. Some endpoints also require additional auth:
+
+**Example:** `POST /v1/claims` requires `Authorization: Bearer <service_api_key>`
+
+```typescript
+await agent.sigilum.fetch("/v1/claims", {
+  method: "POST",
+  headers: {
+    "authorization": `Bearer ${serviceApiKey}`,
+    "content-type": "application/json",
+  },
+  body: JSON.stringify({ claim: "value" }),
+});
+```
+
+## Advanced Usage
+
+### Custom Fetch Implementation
+
+```typescript
+import * as sigilum from "@sigilum/sdk";
+import nodeFetch from "node-fetch";
+
+const agent = sigilum.certify({}, {
+  fetchImpl: nodeFetch as typeof fetch,
+});
+```
+
+### Manual Signing
+
+```typescript
+import { signHttpRequest, loadIdentity } from "@sigilum/sdk";
+
+const identity = loadIdentity({ namespace: "alice" });
+
+const signed = signHttpRequest(identity, {
+  url: "https://api.sigilum.id/v1/namespaces/alice",
+  method: "GET",
+});
+
+console.log(signed.headers.get("signature"));
+```
+
+### Certificate Encoding/Decoding
+
+```typescript
+import { encodeCertificateHeader, decodeCertificateHeader } from "@sigilum/sdk";
+
+const encoded = encodeCertificateHeader(identity.certificate);
+const certificate = decodeCertificateHeader(encoded);
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SDK Overview" icon="layer-group" href="/sdks/overview">
+    Learn about the common SDK contract
+  </Card>
+  <Card title="Python SDK" icon="python" href="/sdks/python">
+    View the Python SDK documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,276 @@
+---
+title: SDK Overview
+description: Multi-language SDKs for local-first agent identity and signed API requests
+---
+
+Sigilum provides official SDKs for TypeScript/Node.js, Python, and Go. All SDKs implement a common contract based on RFC 9421 HTTP Message Signatures, ensuring consistent behavior across languages.
+
+## Supported SDKs
+
+| SDK | Runtime | Package/Module | Status |
+| --- | --- | --- | --- |
+| [TypeScript](/sdks/typescript) | Node.js >= 20 | `@sigilum/sdk` | Supported |
+| [Python](/sdks/python) | Python >= 3.11 | `sigilum` | Supported |
+| [Go](/sdks/go) | Go 1.23 | `sigilum.local/sdk-go` | Supported |
+| Java | JDK 21 | `id.sigilum:sdk-java` | Not yet supported |
+
+## Common Contract
+
+All supported SDKs implement the same RFC 9421-style signing profile:
+
+### Signing Algorithm
+
+- **Algorithm**: Ed25519 signatures
+- **Headers**: RFC 9421-style `Signature-Input` and `Signature`
+- **Components**: Signs method, URI, and custom Sigilum headers
+
+### Required Sigilum Headers
+
+Every signed request includes these headers:
+
+- **`sigilum-namespace`** - The namespace that owns the agent identity
+- **`sigilum-subject`** - The principal who triggered this action (user/system ID)
+- **`sigilum-agent-key`** - The agent's Ed25519 public key (`ed25519:...`)
+- **`sigilum-agent-cert`** - Base64url-encoded agent certificate (version, namespace, DID, keyId, proof)
+
+### Body Integrity
+
+Requests with a body include:
+
+- **`content-digest`** - SHA-256 digest in RFC 9421 format: `sha-256=:base64digest:`
+- The `content-digest` header is included in signed components for tamper detection
+
+### Subject Semantics
+
+`sigilum-subject` is not decorative—it identifies **who triggered this action**:
+
+- Use a stable principal ID (for example: `customer-12345`, `system-scheduler`)
+- Gateway policy can apply subject-level controls using this value
+- If omitted, SDKs default to the signer's namespace for backward compatibility
+- Platforms/integrations are responsible for setting this value accurately
+
+<Warning>
+Never use random or per-request values for `subject`. Use consistent user/system identifiers.
+</Warning>
+
+## Identity Hierarchy
+
+Sigilum uses a DID-based identity model:
+
+```
+namespace -> service -> agent -> subject
+```
+
+**DID Format**: `did:sigilum:{namespace}:{service}#{agent}#{subject}`
+
+**Example**: `did:sigilum:mfs:narmi#davis-agent#customer-12345`
+
+This hierarchy enables:
+- Fine-grained audit trails
+- Subject-level policy enforcement
+- Service isolation within namespaces
+- Agent-specific access controls
+
+## Signature Verification
+
+All SDKs provide server-side verification with deterministic failure metadata:
+
+### Error Codes
+
+Verification failures return machine-readable codes:
+
+| Code | Meaning |
+| --- | --- |
+| `SIG_CONTENT_DIGEST_MISMATCH` | Request body was tampered with |
+| `SIG_VERIFICATION_FAILED` | Signature cryptographically invalid |
+| `SIG_CERT_INVALID` | Agent certificate proof failed |
+| `SIG_TIMESTAMP_OUT_OF_RANGE` | Signature expired or not yet valid |
+| `SIG_REPLAY_DETECTED` | Nonce already seen (replay attack) |
+| `SIG_NAMESPACE_MISMATCH` | Namespace header doesn't match cert |
+| `SIG_SUBJECT_MISSING` | Required subject header missing |
+
+### Replay Protection
+
+SDKs support nonce-based replay detection:
+
+<CodeGroup>
+```typescript TypeScript
+const nonceStore = new Set<string>();
+
+const result = verifyHttpSignature({
+  url: request.url,
+  method: request.method,
+  headers: request.headers,
+  body: await request.text(),
+  strict: {
+    maxAgeSeconds: 300, // 5 minutes
+    nonceStore,
+  },
+});
+
+if (!result.valid) {
+  console.error(result.code, result.reason);
+}
+```
+
+```python Python
+seen_nonces = set()
+
+result = verify_http_signature(
+    url=request.url,
+    method=request.method,
+    headers=request.headers,
+    body=request.body,
+    max_age_seconds=300,  # 5 minutes
+    seen_nonces=seen_nonces,
+)
+
+if not result.valid:
+    print(result.code, result.reason)
+```
+
+```go Go
+seenNonces := make(map[string]struct{})
+
+result := sigilum.VerifyHTTPSignature(sigilum.VerifySignatureInput{
+    URL:           req.URL.String(),
+    Method:        req.Method,
+    Headers:       headers,
+    Body:          body,
+    MaxAgeSeconds: 300, // 5 minutes
+    SeenNonces:    seenNonces,
+})
+
+if !result.Valid {
+    log.Printf("%s: %s", result.Code, result.Reason)
+}
+```
+</CodeGroup>
+
+## Retry Helpers
+
+All SDKs provide portable retry helpers for idempotent operations:
+
+- **Function**: `retryWithBackoff` / `retry_with_backoff` / `RetryWithBackoff`
+- **Status codes**: Retries 429, 502, 503, 504 by default
+- **Backoff**: Exponential with jitter
+- **Safety**: Requires `idempotent: true` when `attempts > 1`
+
+<CodeGroup>
+```typescript TypeScript
+import { retryWithBackoff, shouldRetryHttpStatus } from "@sigilum/sdk";
+
+const response = await retryWithBackoff(
+  async () => {
+    return agent.sigilum.fetch("/v1/namespaces/alice", { method: "GET" });
+  },
+  {
+    idempotent: true,
+    attempts: 3,
+    shouldRetryResult: (res) => shouldRetryHttpStatus(res.status),
+  },
+);
+```
+
+```python Python
+from sigilum import retry_with_backoff, should_retry_http_status
+
+def fetch_namespace():
+    return agent.sigilum.fetch(url="/v1/namespaces/alice", method="GET")
+
+response = retry_with_backoff(
+    fetch_namespace,
+    idempotent=True,
+    attempts=3,
+    should_retry_result=lambda r: should_retry_http_status(r.status),
+)
+```
+
+```go Go
+import "sigilum.local/sdk-go/sigilum"
+
+resp, err := sigilum.RetryWithBackoff(
+    func() (*http.Response, error) {
+        return bindings.Do(ctx, sigilum.SignRequestInput{
+            URL:    "/v1/namespaces/alice",
+            Method: "GET",
+        })
+    },
+    sigilum.RetryOptions{
+        Idempotent: true,
+        Attempts:   3,
+        ShouldRetryResult: func(r *http.Response) bool {
+            return sigilum.ShouldRetryHTTPStatus(r.StatusCode)
+        },
+    },
+)
+```
+</CodeGroup>
+
+## CLI Tools
+
+Supported SDKs ship with CLI tools for identity management:
+
+### Initialize Identity
+
+<CodeGroup>
+```bash TypeScript
+sigilum init johndee
+sigilum init johndee --json  # machine-readable output
+```
+
+```bash Python
+sigilum init johndee
+sigilum init johndee --json  # machine-readable output
+```
+</CodeGroup>
+
+### List Identities
+
+<CodeGroup>
+```bash TypeScript
+sigilum list
+sigilum list --json  # machine-readable output
+```
+
+```bash Python
+sigilum list
+sigilum list --json  # machine-readable output
+```
+</CodeGroup>
+
+## Authentication Model
+
+Signed headers prove agent identity and authenticity. Some endpoints require additional auth:
+
+- **Signed headers**: Required on all protected endpoints (`/v1/*`, `/.well-known/*`)
+- **Bearer tokens**: Some endpoints also require `Authorization: Bearer <service_api_key>`
+- **Example**: `POST /v1/claims` requires both signed headers AND service API key
+
+## Test Vectors
+
+Shared conformance test vectors ensure cross-SDK compatibility:
+
+- `sdks/test-vectors/http-signatures-rfc9421.json` - RFC 9421 signing conformance
+- `sdks/test-vectors/identity-record-v1.json` - Identity record compatibility
+
+Coverage includes:
+- Fragment stripping from URLs
+- Method/body component profile checks
+- Replay/timestamp strictness
+- Tamper detection (method/header/body)
+- Forward-compatible identity record loading
+
+## Next Steps
+
+<CardGroup cols={3}>
+  <Card title="TypeScript SDK" icon="node-js" href="/sdks/typescript">
+    Install and use the TypeScript/Node.js SDK
+  </Card>
+  <Card title="Python SDK" icon="python" href="/sdks/python">
+    Install and use the Python SDK
+  </Card>
+  <Card title="Go SDK" icon="golang" href="/sdks/go">
+    Install and use the Go SDK
+  </Card>
+</CardGroup>

@@ -1,0 +1,550 @@
+---
+title: "Identity Management"
+description: "Manage authentication, services, and credentials"
+---
+
+The Sigilum CLI provides commands for managing namespace-owner authentication, service registration, and credential management.
+
+## Authentication Commands
+
+Namespace-owner JWT tokens are used by the `sigilum-authz-notify` hook to send authorization notifications to the Sigilum API.
+
+### auth login
+
+Bootstrap and store a namespace-owner JWT token.
+
+#### Usage
+
+```bash
+sigilum auth login [options]
+```
+
+#### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--mode <mode>` | `managed` | Sigilum mode: `managed` or `oss-local` |
+| `--namespace <value>` | Auto-detected | Target namespace |
+| `--email <value>` | `<namespace>@local.sigilum` | Owner email |
+| `--api-url <url>` | Mode default | API base URL |
+| `--owner-token <jwt>` | - | Explicit owner token (managed mode) |
+| `--owner-token-stdin` | `false` | Read owner token from stdin |
+| `--ttl-seconds <n>` | `604800` (7 days) | Token TTL in seconds |
+| `--openclaw-home <path>` | `~/.openclaw` | OpenClaw home directory |
+| `--config <path>` | `<openclaw-home>/openclaw.json` | OpenClaw config path |
+| `--token-file <path>` | Auto-generated | Token file path |
+| `--write-openclaw <bool>` | `true` | Update openclaw.json |
+| `--enable-authz-notify` | `preserve` | Set hook enabled state (`bool` or `preserve`) |
+| `--print-token <bool>` | `true` | Print token in output |
+| `--token-only` | `false` | Print only the JWT token |
+
+#### Examples
+
+OSS-local mode login:
+
+```bash
+sigilum auth login --mode oss-local --namespace johndee
+```
+
+Output:
+```
+[ok] Namespace-owner token ready.
+  mode:                oss-local
+  namespace:           johndee
+  api:                 http://127.0.0.1:8787
+  token_file:          /home/user/.openclaw/.sigilum/owner-token-johndee.jwt
+  openclaw_config:     /home/user/.openclaw/openclaw.json
+  authz_notify_enabled: preserve
+
+[i] JWT:
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+Managed mode login:
+
+```bash
+sigilum auth login --mode managed --namespace johndee --owner-token-stdin
+```
+
+Then paste your JWT token obtained from the dashboard login flow.
+
+Login and enable authz notify:
+
+```bash
+sigilum auth login \
+  --mode managed \
+  --namespace johndee \
+  --owner-token <jwt> \
+  --enable-authz-notify true
+```
+
+Token-only output (for scripts):
+
+```bash
+TOKEN=$(sigilum auth login --mode oss-local --namespace johndee --token-only)
+echo $TOKEN
+```
+
+#### Managed Mode Flow
+
+1. Sign in at [sigilum.id](https://sigilum.id)
+2. Complete passkey authentication
+3. Copy the JWT token from your account page or CLI helper
+4. Run `sigilum auth login --mode managed --namespace johndee --owner-token-stdin`
+5. Paste the token
+
+#### OSS-Local Mode Flow
+
+In oss-local mode, the command:
+
+1. Ensures the local API database is initialized
+2. Creates or updates the namespace owner user
+3. Issues a new JWT token signed with the local JWT secret
+4. Stores the token in `~/.openclaw/.sigilum/owner-token-<namespace>.jwt`
+5. Optionally updates `openclaw.json` to include the token in the `sigilum-authz-notify` hook
+
+### auth refresh
+
+Issue a new local JWT token (oss-local mode) and store it.
+
+#### Usage
+
+```bash
+sigilum auth refresh [options]
+```
+
+#### Options
+
+Same as `auth login`.
+
+#### Examples
+
+Refresh local token:
+
+```bash
+sigilum auth refresh --mode oss-local --namespace johndee
+```
+
+Output:
+```
+[ok] Namespace-owner token ready.
+  mode:                oss-local
+  namespace:           johndee
+  api:                 http://127.0.0.1:8787
+  token_file:          /home/user/.openclaw/.sigilum/owner-token-johndee.jwt
+  ...
+```
+
+### auth show
+
+Display the stored namespace-owner JWT token.
+
+#### Usage
+
+```bash
+sigilum auth show [options]
+```
+
+#### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--namespace <value>` | Auto-detected | Target namespace |
+| `--openclaw-home <path>` | `~/.openclaw` | OpenClaw home directory |
+| `--token-file <path>` | Auto-generated | Token file path override |
+
+#### Examples
+
+Show stored token:
+
+```bash
+sigilum auth show --namespace johndee
+```
+
+Output:
+```
+eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
+```
+
+Show token from custom location:
+
+```bash
+sigilum auth show --token-file ~/custom/token.jwt
+```
+
+### login (alias)
+
+The `login` command is an alias for `auth login`:
+
+```bash
+sigilum login --mode oss-local --namespace johndee
+```
+
+## Service Management Commands
+
+Service management commands register services with the Sigilum API and configure gateway connections.
+
+### service add
+
+Register a service in the local API database, create/store service API keys, and (for gateway mode) create/update gateway connections with upstream secrets.
+
+#### Usage
+
+```bash
+sigilum service add --service-slug <slug> [options]
+```
+
+#### Required Options
+
+| Option | Description |
+|--------|-------------|
+| `--service-slug <slug>` | Unique service identifier |
+
+#### General Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--service-name <name>` | Same as slug | Human-readable service name |
+| `--description <text>` | - | Service description |
+| `--domain <domain>` | `localhost` | Service domain |
+| `--namespace <namespace>` | Auto-detected | Target namespace |
+| `--email <email>` | `<namespace>@local.sigilum` | Service owner email |
+| `--mode <mode>` | `native` | Service mode: `native` or `gateway` |
+
+#### Gateway Mode Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--upstream-base-url <url>` | - | Upstream API base URL (required) |
+| `--auth-mode <mode>` | `bearer` | Auth mode: `bearer`, `header_key`, `query_param` |
+| `--upstream-header <name>` | - | Upstream auth header name |
+| `--auth-prefix <value>` | - | Auth header prefix (e.g., `Bearer `) |
+| `--upstream-secret-key <key>` | - | Secret key name in gateway secrets map |
+| `--upstream-secret <value>` | - | Provide secret directly |
+| `--upstream-secret-env <name>` | - | Read secret from environment variable |
+| `--upstream-secret-file <path>` | - | Read secret from file |
+| `--reveal-secrets` | `false` | Print raw secret values in output |
+| `--gateway-admin-url <url>` | `http://127.0.0.1:38100` | Gateway admin endpoint |
+| `--gateway-data-dir <path>` | - | Fallback gateway data directory |
+| `--gateway-master-key <value>` | - | Fallback gateway master key |
+
+#### Examples
+
+Add native service:
+
+```bash
+sigilum service add \
+  --service-slug my-native-service \
+  --service-name "My Native Service" \
+  --mode native
+```
+
+Output:
+```
+[ok] Service registered: my-native-service
+  mode:        native
+  service_id:  svc_abc123
+  api_key:     sk_****** (hidden)
+  key_file:    .sigilum-workspace/service-api-key-my-native-service
+```
+
+Add gateway service (Linear):
+
+```bash
+export LINEAR_TOKEN="lin_api_..."
+
+sigilum service add \
+  --service-slug linear \
+  --service-name "Linear" \
+  --mode gateway \
+  --upstream-base-url https://api.linear.app \
+  --auth-mode bearer \
+  --upstream-secret-env LINEAR_TOKEN
+```
+
+Output:
+```
+[ok] Service registered: linear
+  mode:             gateway
+  service_id:       svc_def456
+  api_key:          sk_****** (hidden)
+  upstream_url:     https://api.linear.app
+  auth_mode:        bearer
+  connection_id:    conn_xyz789
+  secret_key:       access_token
+  key_file:         .sigilum-workspace/service-api-key-linear
+  connection_file:  .sigilum-workspace/gateway-connection-secret-linear
+```
+
+Add gateway service with query parameter auth:
+
+```bash
+export TYPEFULLY_API_KEY="tfy_..."
+
+sigilum service add \
+  --service-slug typefully \
+  --service-name "Typefully" \
+  --mode gateway \
+  --upstream-base-url https://mcp.typefully.com \
+  --auth-mode query_param \
+  --upstream-header TYPEFULLY_API_KEY \
+  --upstream-secret-key api_key \
+  --upstream-secret-env TYPEFULLY_API_KEY
+```
+
+Reveal secrets in output:
+
+```bash
+sigilum service add \
+  --service-slug linear \
+  --mode gateway \
+  --upstream-base-url https://api.linear.app \
+  --upstream-secret-env LINEAR_TOKEN \
+  --reveal-secrets
+```
+
+#### Authentication Modes
+
+- `bearer`: Authorization header with Bearer token
+  - Example: `Authorization: Bearer <token>`
+- `header_key`: Custom header with key
+  - Example: `X-API-Key: <token>`
+- `query_param`: Query parameter
+  - Example: `?API_KEY=<token>`
+
+#### Secret Sources
+
+You can provide the upstream secret using one of these options:
+
+- `--upstream-secret <value>`: Provide directly (not recommended for sensitive values)
+- `--upstream-secret-env <name>`: Read from environment variable (recommended)
+- `--upstream-secret-file <path>`: Read from file
+
+If none is provided, a random secret is generated.
+
+#### Credential Storage
+
+- Service API keys: `.sigilum-workspace/service-api-key-<slug>`
+- Gateway connection secrets: `.sigilum-workspace/gateway-connection-secret-<slug>`
+- Files are created with mode `0600` (owner read/write only)
+
+### service list
+
+List services registered in the local API database for a namespace.
+
+#### Usage
+
+```bash
+sigilum service list [options]
+```
+
+#### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--namespace <namespace>` | Auto-detected | Target namespace |
+| `--json` | `false` | Output as JSON |
+
+#### Examples
+
+List services:
+
+```bash
+sigilum service list --namespace johndee
+```
+
+Output:
+```
+[ok] Services for namespace: johndee
+
+  my-native-service (svc_abc123)
+    mode:        native
+    created:     2026-03-01T10:00:00Z
+
+  linear (svc_def456)
+    mode:        gateway
+    upstream:    https://api.linear.app
+    created:     2026-03-01T10:05:00Z
+
+  typefully (svc_ghi789)
+    mode:        gateway
+    upstream:    https://mcp.typefully.com
+    created:     2026-03-01T10:10:00Z
+```
+
+List services as JSON:
+
+```bash
+sigilum service list --namespace johndee --json
+```
+
+Output:
+```json
+{
+  "namespace": "johndee",
+  "services": [
+    {
+      "id": "svc_abc123",
+      "slug": "my-native-service",
+      "name": "My Native Service",
+      "mode": "native",
+      "created_at": "2026-03-01T10:00:00Z"
+    },
+    {
+      "id": "svc_def456",
+      "slug": "linear",
+      "name": "Linear",
+      "mode": "gateway",
+      "upstream_url": "https://api.linear.app",
+      "created_at": "2026-03-01T10:05:00Z"
+    }
+  ]
+}
+```
+
+### service secret set
+
+Rotate or set an upstream secret for an existing gateway connection.
+
+#### Usage
+
+```bash
+sigilum service secret set --service-slug <slug> [options]
+```
+
+#### Required Options
+
+| Option | Description |
+|--------|-------------|
+| `--service-slug <slug>` | Target service identifier |
+
+#### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--upstream-secret-key <key>` | - | Secret key name override |
+| `--upstream-secret <value>` | - | Provide secret directly |
+| `--upstream-secret-env <name>` | - | Read secret from environment variable |
+| `--upstream-secret-file <path>` | - | Read secret from file |
+| `--reveal-secrets` | `false` | Print raw secret values in output |
+| `--gateway-admin-url <url>` | `http://127.0.0.1:38100` | Gateway admin endpoint |
+
+#### Examples
+
+Rotate Linear token:
+
+```bash
+export LINEAR_TOKEN="lin_api_new_token"
+sigilum service secret set --service-slug linear --upstream-secret-env LINEAR_TOKEN
+```
+
+Output:
+```
+[ok] Secret updated for service: linear
+  connection_id:    conn_xyz789
+  secret_key:       access_token
+  connection_file:  .sigilum-workspace/gateway-connection-secret-linear
+```
+
+Set secret with reveal:
+
+```bash
+sigilum service secret set \
+  --service-slug linear \
+  --upstream-secret-key access_token \
+  --upstream-secret-env LINEAR_TOKEN \
+  --reveal-secrets
+```
+
+Output:
+```
+[ok] Secret updated for service: linear
+  connection_id:    conn_xyz789
+  secret_key:       access_token
+  secret_value:     lin_api_new_token
+  connection_file:  .sigilum-workspace/gateway-connection-secret-linear
+```
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `SIGILUM_NAMESPACE` | Default namespace |
+| `GATEWAY_SIGILUM_NAMESPACE` | Gateway-specific namespace |
+| `SIGILUM_MODE` | Sigilum mode (managed or oss-local) |
+| `SIGILUM_API_URL` | API base URL |
+| `SIGILUM_OWNER_TOKEN` | Namespace-owner JWT token |
+| `SIGILUM_OWNER_EMAIL` | Owner email |
+| `SIGILUM_OWNER_TOKEN_TTL_SECONDS` | Token TTL in seconds |
+| `GATEWAY_ADMIN_URL` | Gateway admin endpoint URL |
+| `GATEWAY_DATA_DIR` | Gateway data directory |
+| `GATEWAY_MASTER_KEY` | Gateway master encryption key |
+| `JWT_SECRET` | Local JWT signing secret (oss-local) |
+
+## Troubleshooting
+
+### "Unable to resolve JWT_SECRET"
+
+For oss-local mode, ensure `apps/api/.dev.vars` contains:
+
+```bash
+JWT_SECRET=<your-secret>
+```
+
+Or set the environment variable:
+
+```bash
+export JWT_SECRET=<your-secret>
+sigilum auth login --mode oss-local --namespace johndee
+```
+
+### "Token file not found"
+
+The token file is missing. Run login or refresh:
+
+```bash
+sigilum auth login --mode oss-local --namespace johndee
+```
+
+### "Managed mode requires an explicit owner JWT"
+
+For managed mode, you must provide a token from the dashboard:
+
+```bash
+sigilum auth login --mode managed --namespace johndee --owner-token-stdin
+```
+
+### Service add fails: "Gateway admin not reachable"
+
+Ensure the gateway is running:
+
+```bash
+sigilum gateway start --namespace johndee
+```
+
+Verify gateway health:
+
+```bash
+curl http://127.0.0.1:38100/health
+```
+
+### Secret not set in gateway connection
+
+Check the connection file:
+
+```bash
+cat .sigilum-workspace/gateway-connection-secret-<slug>
+```
+
+If missing, re-run service add or secret set.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Gateway Commands" icon="server" href="/cli/gateway">
+    Manage the Sigilum gateway
+  </Card>
+  <Card title="OpenClaw Integration" icon="puzzle-piece" href="/cli/openclaw">
+    Integrate with OpenClaw agents
+  </Card>
+</CardGroup>

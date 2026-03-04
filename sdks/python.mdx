@@ -1,0 +1,472 @@
+---
+title: Python SDK
+description: Python SDK for local-first agent identity and signed API requests
+---
+
+## Installation
+
+```bash
+pip install sigilum
+```
+
+## Requirements
+
+- Python >= 3.11
+
+## Quick Start
+
+### 1. Initialize Identity
+
+Create a local agent identity once:
+
+```bash
+sigilum init johndee
+```
+
+For automation, use machine-readable output:
+
+```bash
+sigilum init johndee --json
+sigilum list --json
+```
+
+### 2. Certify Your Agent
+
+Attach identity and signed request helpers to any object:
+
+```python
+import sigilum
+
+class Agent:
+    pass
+
+agent = Agent()
+sigilum.certify(agent, namespace="alice")
+```
+
+This does not wrap your agent class—it attaches a `.sigilum` property with identity metadata and request helpers.
+
+### 3. Send Signed Requests
+
+```python
+import sigilum
+
+class Agent:
+    pass
+
+agent = Agent()
+sigilum.certify(agent, namespace="alice")
+
+response = agent.sigilum.fetch(
+    url=f"/v1/namespaces/{agent.sigilum.namespace}",
+    method="GET",
+)
+
+print(response.status)
+print(response.read().decode("utf-8"))
+```
+
+## API Reference
+
+### `certify(agent, **kwargs)`
+
+Attaches Sigilum identity bindings to an agent object.
+
+**Parameters:**
+
+- `agent: Any` - Any object to certify (required)
+- `namespace: str | None` - Namespace to load (defaults to first found)
+- `home_dir: str | None` - Custom identity directory (defaults to `~/.sigilum`)
+- `api_base_url: str | None` - API base URL (defaults to `https://api.sigilum.id` or `SIGILUM_API_URL`)
+- `fetcher: Fetcher | None` - Custom fetch implementation
+
+**Returns:** The agent with `.sigilum` bindings attached
+
+**Example:**
+
+```python
+import sigilum
+
+class MyAgent:
+    def __init__(self, name):
+        self.name = name
+
+agent = MyAgent("assistant")
+sigilum.certify(agent, namespace="alice")
+```
+
+### `agent.sigilum`
+
+Bindings attached to certified agents:
+
+#### Properties
+
+- `namespace: str` - Agent's namespace
+- `did: str` - Agent's DID (for example: `did:sigilum:alice:default#agent-abc123#alice`)
+- `key_id: str` - Agent's key ID
+- `public_key: str` - Agent's Ed25519 public key (`ed25519:...`)
+- `certificate: SigilumCertificate` - Agent's certificate with proof
+- `api_base_url: str` - Resolved API base URL
+
+#### Methods
+
+##### `sign(**kwargs)`
+
+Signs a request without sending it.
+
+**Parameters:**
+
+- `url: str` - Request URL (absolute or relative) (required)
+- `method: str` - HTTP method (defaults to `"GET"`)
+- `headers: HeaderInput | None` - Request headers (dict or list of tuples)
+- `body: bytes | str | None` - Request body
+- `subject: str | None` - Override subject for this request
+- `created: int | None` - Unix timestamp for signature (defaults to now)
+- `nonce: str | None` - Custom nonce (defaults to random UUID)
+
+**Returns:** `SignedRequest`
+
+**Example:**
+
+```python
+signed = agent.sigilum.sign(
+    url="/v1/namespaces/alice",
+    method="GET",
+)
+
+print(signed.headers["signature-input"])
+print(signed.headers["signature"])
+```
+
+##### `fetch(**kwargs)`
+
+Signs and sends a request using urllib.
+
+**Parameters:**
+
+- `url: str` - Request URL (absolute or relative) (required)
+- `method: str` - HTTP method (defaults to `"GET"`)
+- `headers: HeaderInput | None` - Request headers
+- `body: bytes | str | None` - Request body
+- `subject: str | None` - Override subject for this request
+
+**Returns:** `http.client.HTTPResponse`
+
+**Example:**
+
+```python
+# Simple GET
+response = agent.sigilum.fetch(
+    url=f"/v1/namespaces/{agent.sigilum.namespace}",
+    method="GET",
+)
+
+# POST with body and custom subject
+import json
+
+response = agent.sigilum.fetch(
+    url="/claims",
+    method="POST",
+    subject="customer-12345",
+    headers={"content-type": "application/json"},
+    body=json.dumps({"claim": "value"}),
+)
+```
+
+##### `request(path, **kwargs)`
+
+Convenience method that resolves paths relative to the namespace API base.
+
+**Parameters:**
+
+- `path: str` - Path relative to `/v1/namespaces/{namespace}/` (required)
+- `method: str` - HTTP method (defaults to `"GET"`)
+- `headers: HeaderInput | None` - Request headers
+- `body: bytes | str | None` - Request body
+- `subject: str | None` - Override subject for this request
+
+**Returns:** `http.client.HTTPResponse`
+
+**Example:**
+
+```python
+# Automatically resolves to /v1/namespaces/alice/claims
+response = agent.sigilum.request(
+    "/claims",
+    method="POST",
+    subject="customer-12345",
+)
+```
+
+### `init_identity(**kwargs)`
+
+Programmatically initialize a new agent identity.
+
+**Parameters:**
+
+- `namespace: str` - Namespace for this identity (required)
+- `home_dir: str | None` - Custom identity directory
+- `force: bool` - Overwrite existing identity (defaults to `False`)
+
+**Returns:** `InitIdentityResult`
+
+**Example:**
+
+```python
+from sigilum import init_identity
+
+result = init_identity(namespace="alice")
+print(result.did)
+print(result.public_key)
+```
+
+### `load_identity(**kwargs)`
+
+Load an existing agent identity.
+
+**Parameters:**
+
+- `namespace: str | None` - Namespace to load (defaults to first found)
+- `home_dir: str | None` - Custom identity directory
+
+**Returns:** `SigilumIdentity`
+
+**Example:**
+
+```python
+from sigilum import load_identity
+
+identity = load_identity(namespace="alice")
+print(identity.namespace)
+print(identity.public_key)
+```
+
+### `verify_http_signature(**kwargs)`
+
+Verify an incoming signed request (server-side).
+
+**Parameters:**
+
+- `url: str` - Request URL (required)
+- `method: str` - HTTP method (required)
+- `headers: HeaderInput` - Request headers (required)
+- `body: bytes | str | None` - Request body
+- `expected_namespace: str | None` - Require specific namespace
+- `expected_subject: str | None` - Require specific subject
+- `max_age_seconds: int | None` - Maximum signature age
+- `now_ts: int | None` - Current Unix timestamp (defaults to now)
+- `seen_nonces: set[str] | None` - Nonce set for replay detection
+
+**Returns:** `VerifySignatureResult`
+
+**Example:**
+
+```python
+from sigilum import verify_http_signature
+
+seen_nonces = set()
+
+result = verify_http_signature(
+    url=request.url,
+    method=request.method,
+    headers=request.headers,
+    body=request.body,
+    expected_namespace="alice",
+    max_age_seconds=300,  # 5 minutes
+    seen_nonces=seen_nonces,
+)
+
+if not result.valid:
+    print(f"Signature verification failed: {result.code}")
+    print(result.reason)
+else:
+    print(f"Verified request from namespace: {result.namespace}")
+    print(f"Subject: {result.subject}")
+```
+
+### `retry_with_backoff(operation, **kwargs)`
+
+Retry helper with exponential backoff for idempotent operations.
+
+**Parameters:**
+
+- `operation: Callable[[], T]` - Sync operation to retry (required)
+- `idempotent: bool` - **Required**. Must be `True` when `attempts > 1`
+- `attempts: int` - Max attempts (defaults to 3)
+- `base_delay_seconds: float` - Initial delay (defaults to 0.1)
+- `max_delay_seconds: float` - Maximum delay (defaults to 2.0)
+- `jitter_ratio: float` - Jitter ratio (defaults to 0.2)
+- `should_retry_result: Callable[[T], bool] | None` - Retry predicate for results
+- `should_retry_error: Callable[[Exception], bool] | None` - Retry predicate for errors
+- `sleep: Callable[[float], None]` - Custom sleep implementation (defaults to `time.sleep`)
+
+**Returns:** `T`
+
+**Example:**
+
+```python
+from sigilum import retry_with_backoff, should_retry_http_status
+
+def fetch_namespace():
+    return agent.sigilum.fetch(
+        url="/v1/namespaces/alice",
+        method="GET",
+    )
+
+response = retry_with_backoff(
+    fetch_namespace,
+    idempotent=True,
+    attempts=3,
+    should_retry_result=lambda r: should_retry_http_status(r.status),
+)
+```
+
+### `should_retry_http_status(status)`
+
+Helper that returns `True` for retryable HTTP status codes.
+
+**Retryable statuses:** 429, 502, 503, 504
+
+**Example:**
+
+```python
+from sigilum import should_retry_http_status
+
+should_retry_http_status(429)  # True
+should_retry_http_status(500)  # False
+should_retry_http_status(200)  # False
+```
+
+## Subject Override
+
+Override the `sigilum-subject` header for a specific request:
+
+```python
+# Override subject for this request (for example, the end user ID)
+agent.sigilum.fetch(
+    url="/claims",
+    method="POST",
+    subject="customer-12345",
+)
+
+# Or using request()
+agent.sigilum.request(
+    "/claims",
+    method="POST",
+    subject="customer-12345",
+)
+```
+
+If `subject` is omitted, the SDK defaults to the signer's namespace.
+
+## Identity Model
+
+**Hierarchy:** `namespace -> service -> agent -> subject`
+
+**DID Format:** `did:sigilum:{namespace}:{service}#{agent}#{subject}`
+
+**Example:** `did:sigilum:mfs:narmi#davis-agent#customer-12345`
+
+## Error Codes
+
+Signature verification failures return deterministic codes:
+
+| Code | Meaning |
+| --- | --- |
+| `SIG_CONTENT_DIGEST_MISMATCH` | Request body tampered |
+| `SIG_VERIFICATION_FAILED` | Signature cryptographically invalid |
+| `SIG_CERT_INVALID` | Agent certificate proof failed |
+| `SIG_TIMESTAMP_OUT_OF_RANGE` | Signature expired or not yet valid |
+| `SIG_REPLAY_DETECTED` | Nonce already seen (replay attack) |
+| `SIG_NAMESPACE_MISMATCH` | Namespace header doesn't match cert |
+| `SIG_SUBJECT_MISSING` | Required subject header missing |
+| `SIG_MISSING_SIGNATURE_HEADERS` | Missing Signature-Input or Signature |
+| `SIG_ALGORITHM_UNSUPPORTED` | Unsupported signature algorithm |
+
+## Authentication Note
+
+Signed headers prove agent identity. Some endpoints also require additional auth:
+
+**Example:** `POST /v1/claims` requires `Authorization: Bearer <service_api_key>`
+
+```python
+import json
+
+response = agent.sigilum.fetch(
+    url="/v1/claims",
+    method="POST",
+    headers={
+        "authorization": f"Bearer {service_api_key}",
+        "content-type": "application/json",
+    },
+    body=json.dumps({"claim": "value"}),
+)
+```
+
+## Advanced Usage
+
+### Custom Fetcher
+
+```python
+import sigilum
+import requests
+
+def custom_fetcher(url, method, headers, body):
+    return requests.request(method, url, headers=headers, data=body)
+
+sigilum.certify(agent, fetcher=custom_fetcher)
+```
+
+### Manual Signing
+
+```python
+from sigilum import sign_http_request, load_identity
+
+identity = load_identity(namespace="alice")
+
+signed = sign_http_request(
+    identity=identity,
+    url="https://api.sigilum.id/v1/namespaces/alice",
+    method="GET",
+)
+
+print(signed.headers["signature"])
+```
+
+### Certificate Encoding/Decoding
+
+```python
+from sigilum import encode_certificate_header, decode_certificate_header
+
+encoded = encode_certificate_header(identity.certificate)
+certificate = decode_certificate_header(encoded)
+```
+
+## Type Hints
+
+The SDK provides full type hints:
+
+```python
+from sigilum import (
+    SigilumIdentity,
+    SigilumCertificate,
+    SignedRequest,
+    VerifySignatureResult,
+    InitIdentityResult,
+)
+
+identity: SigilumIdentity = load_identity(namespace="alice")
+certificate: SigilumCertificate = identity.certificate
+result: VerifySignatureResult = verify_http_signature(...)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SDK Overview" icon="layer-group" href="/sdks/overview">
+    Learn about the common SDK contract
+  </Card>
+  <Card title="Go SDK" icon="golang" href="/sdks/go">
+    View the Go SDK documentation
+  </Card>
+</CardGroup>

@@ -1,0 +1,375 @@
+---
+title: 'DID Resolution'
+description: 'Resolve Sigilum DID documents for namespace identity verification'
+---
+
+## Overview
+
+Sigilum namespaces are identified by Decentralized Identifiers (DIDs) following the `did:sigilum:<namespace>` method. DID documents expose the namespace's current authorization state, including:
+
+- Verification methods (agent public keys)
+- Service endpoints for approved authorizations
+- Controller information
+- Namespace metadata
+
+## DID Format
+
+```
+did:sigilum:<namespace>
+```
+
+**Examples:**
+- `did:sigilum:acme-corp`
+- `did:sigilum:my-company`
+- `did:sigilum:example-namespace`
+
+## Resolve DID Document
+
+<ParamField path="GET /.well-known/did/{did}" type="endpoint">
+  Resolve a `did:sigilum:<namespace>` DID to its DID document.
+</ParamField>
+
+Requires signed headers with valid agent certificate.
+
+### Path Parameters
+
+<ParamField path="did" type="string" required>
+  DID value (must match pattern `did:sigilum:<namespace>`).
+  
+  **Example:** `did:sigilum:acme-corp`
+</ParamField>
+
+### Response Headers
+
+<ResponseField name="Content-Type" type="string">
+  - `application/did+json` (preferred)
+  - `application/json` (also supported)
+</ResponseField>
+
+### Response Body
+
+<ResponseField name="@context" type="array" required>
+  JSON-LD context for DID document.
+  
+  **Value:** `["https://www.w3.org/ns/did/v1"]`
+</ResponseField>
+
+<ResponseField name="id" type="string" required>
+  The DID identifier.
+  
+  **Example:** `did:sigilum:acme-corp`
+</ResponseField>
+
+<ResponseField name="controller" type="string" required>
+  DID controller (typically same as `id` for self-sovereign namespaces).
+</ResponseField>
+
+<ResponseField name="created" type="string" required>
+  ISO 8601 timestamp when namespace was created.
+</ResponseField>
+
+<ResponseField name="updated" type="string" required>
+  ISO 8601 timestamp when DID document was last updated.
+</ResponseField>
+
+<ResponseField name="verificationMethod" type="array" required>
+  Array of verification methods (agent public keys with authorization status).
+  
+  <ResponseField name="id" type="string" required>
+    Verification method identifier.
+    
+    **Format:** `{did}#agent-{index}`
+  </ResponseField>
+  
+  <ResponseField name="type" type="string" required>
+    Key type: `Ed25519VerificationKey2020`
+  </ResponseField>
+  
+  <ResponseField name="publicKeyBase64" type="string" required>
+    Base64-encoded public key bytes.
+  </ResponseField>
+  
+  <ResponseField name="service" type="string" required>
+    Service slug this key is authorized for.
+  </ResponseField>
+  
+  <ResponseField name="status" type="string" required>
+    Authorization status: `approved`, `pending`, `revoked`, `rejected`
+  </ResponseField>
+</ResponseField>
+
+## Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://api.sigilum.id/.well-known/did/did:sigilum:acme-corp' \
+  -H 'Accept: application/did+json' \
+  -H 'signature-input: sig1=("@method" "@target-uri" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=1705320000;keyid="agent-key-1";alg="ed25519";nonce="n123"' \
+  -H 'signature: sig1=:MEUCIQDx...==:' \
+  -H 'sigilum-namespace: acme-corp' \
+  -H 'sigilum-subject: user@example.com' \
+  -H 'sigilum-agent-key: ed25519:LS0tLS...' \
+  -H 'sigilum-agent-cert: eyJ2ZXJzaW9u...'
+```
+
+```json Response
+{
+  "@context": [
+    "https://www.w3.org/ns/did/v1"
+  ],
+  "id": "did:sigilum:acme-corp",
+  "controller": "did:sigilum:acme-corp",
+  "created": "2024-01-15T10:30:00Z",
+  "updated": "2024-01-20T14:22:00Z",
+  "verificationMethod": [
+    {
+      "id": "did:sigilum:acme-corp#agent-0",
+      "type": "Ed25519VerificationKey2020",
+      "publicKeyBase64": "LS0tLS1CRUdJTi...",
+      "service": "my-service",
+      "status": "approved"
+    },
+    {
+      "id": "did:sigilum:acme-corp#agent-1",
+      "type": "Ed25519VerificationKey2020",
+      "publicKeyBase64": "QW5vdGhlclB1Ymx...",
+      "service": "my-service",
+      "status": "pending"
+    }
+  ]
+}
+```
+
+</CodeGroup>
+
+## DID Resolution Envelope
+
+<ParamField path="GET /1.0/identifiers/{did}" type="endpoint">
+  Resolve DID with full resolution metadata envelope.
+</ParamField>
+
+Returns DID Resolution Result as defined by W3C DID specification.
+
+### Response Headers
+
+<ResponseField name="Content-Type" type="string">
+  `application/ld+json;profile="https://w3id.org/did-resolution"`
+</ResponseField>
+
+### Response Body
+
+<ResponseField name="@context" type="string" required>
+  DID resolution context URL.
+</ResponseField>
+
+<ResponseField name="didDocument" type="object" required>
+  The resolved DID document (same structure as `/.well-known/did/{did}` response).
+</ResponseField>
+
+<ResponseField name="didDocumentMetadata" type="object" required>
+  Metadata about the DID document.
+  
+  <ResponseField name="created" type="string" required>
+    When the DID was created.
+  </ResponseField>
+  
+  <ResponseField name="updated" type="string" required>
+    When the DID was last updated.
+  </ResponseField>
+  
+  <ResponseField name="deactivated" type="boolean">
+    Whether the namespace has been deactivated. When `true`, historical authorization state exists but the namespace owner is no longer active.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="didResolutionMetadata" type="object" required>
+  Metadata about the resolution process.
+  
+  <ResponseField name="contentType" type="string" required>
+    Content type of the response.
+  </ResponseField>
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://api.sigilum.id/1.0/identifiers/did:sigilum:acme-corp' \
+  -H 'Accept: application/ld+json' \
+  -H 'signature-input: sig1=("@method" "@target-uri" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=1705320000;keyid="agent-key-1";alg="ed25519";nonce="n456"' \
+  -H 'signature: sig1=:MEUCIQDx...==:' \
+  -H 'sigilum-namespace: acme-corp' \
+  -H 'sigilum-subject: user@example.com' \
+  -H 'sigilum-agent-key: ed25519:LS0tLS...' \
+  -H 'sigilum-agent-cert: eyJ2ZXJzaW9u...'
+```
+
+```json Response
+{
+  "@context": "https://w3id.org/did-resolution/v1",
+  "didDocument": {
+    "@context": [
+      "https://www.w3.org/ns/did/v1"
+    ],
+    "id": "did:sigilum:acme-corp",
+    "controller": "did:sigilum:acme-corp",
+    "created": "2024-01-15T10:30:00Z",
+    "updated": "2024-01-20T14:22:00Z",
+    "verificationMethod": [
+      {
+        "id": "did:sigilum:acme-corp#agent-0",
+        "type": "Ed25519VerificationKey2020",
+        "publicKeyBase64": "LS0tLS1CRUdJTi...",
+        "service": "my-service",
+        "status": "approved"
+      }
+    ]
+  },
+  "didDocumentMetadata": {
+    "created": "2024-01-15T10:30:00Z",
+    "updated": "2024-01-20T14:22:00Z",
+    "deactivated": false
+  },
+  "didResolutionMetadata": {
+    "contentType": "application/did+ld+json"
+  }
+}
+```
+
+</CodeGroup>
+
+## Use Cases
+
+### Identity Verification
+
+Verify namespace ownership and agent authorization:
+
+```javascript
+import { resolveDID } from '@sigilum/sdk';
+
+const didDoc = await resolveDID('did:sigilum:acme-corp');
+
+// Check if specific agent is authorized
+const agentKey = 'LS0tLS1CRUdJTi...';
+const authorized = didDoc.verificationMethod.some(
+  vm => vm.publicKeyBase64 === agentKey && vm.status === 'approved'
+);
+
+if (authorized) {
+  console.log('Agent is authorized');
+} else {
+  console.log('Agent is not authorized');
+}
+```
+
+### Service Discovery
+
+Discover which services an agent is authorized for:
+
+```javascript
+const didDoc = await resolveDID('did:sigilum:acme-corp');
+
+const agentKey = 'LS0tLS1CRUdJTi...';
+const services = didDoc.verificationMethod
+  .filter(vm => vm.publicKeyBase64 === agentKey && vm.status === 'approved')
+  .map(vm => vm.service);
+
+console.log('Authorized services:', services);
+// Output: ['my-service', 'other-service']
+```
+
+### Audit Trail
+
+Track authorization history:
+
+```javascript
+const didDoc = await resolveDID('did:sigilum:acme-corp');
+
+console.log('Namespace created:', didDoc.created);
+console.log('Last updated:', didDoc.updated);
+
+const summary = {
+  approved: 0,
+  pending: 0,
+  revoked: 0,
+  rejected: 0,
+};
+
+for (const vm of didDoc.verificationMethod) {
+  summary[vm.status]++;
+}
+
+console.log('Authorization summary:', summary);
+// Output: { approved: 5, pending: 2, revoked: 1, rejected: 0 }
+```
+
+## Error Responses
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 400 | `INVALID_DID` | DID format is invalid |
+| 401 | `SIGNATURE_INVALID` | Invalid or missing signed headers |
+| 404 | `DID_NOT_FOUND` | Namespace does not exist |
+
+## Deactivated Namespaces
+
+When a namespace owner deletes their account, the DID document is marked as deactivated:
+
+```json
+{
+  "didDocumentMetadata": {
+    "deactivated": true,
+    "created": "2024-01-15T10:30:00Z",
+    "updated": "2024-02-20T08:15:00Z"
+  }
+}
+```
+
+Deactivated namespaces:
+- Retain historical authorization data
+- Cannot approve new authorizations
+- Existing approved authorizations are effectively revoked
+- DID document remains resolvable for audit purposes
+
+## Integration with Blockchain
+
+When blockchain integration is enabled (`BLOCKCHAIN_MODE` is not `disabled`), namespace registration and key events are recorded on-chain:
+
+- **Namespace registration**: Transaction hash in `registration_tx_hash`
+- **Authorization approval**: Transaction hash in `approval_tx_hash`
+- **Authorization revocation**: Transaction hash in `revocation_tx_hash`
+
+These transaction hashes provide an immutable audit trail that can be verified independently.
+
+## Caching Recommendations
+
+DID documents can be cached with appropriate TTLs:
+
+- **Approved authorizations**: Cache for 5-15 minutes
+- **Pending/rejected**: Cache for 1 minute or less
+- **Metadata**: Cache for 1 hour
+
+Invalidate cache on webhook events:
+- `request.approved` → Refresh DID document
+- `request.revoked` → Refresh DID document
+- Namespace updates → Refresh DID document
+
+## Security Considerations
+
+### Public Key Encoding
+
+`publicKeyBase64` contains the raw Ed25519 public key bytes (32 bytes) encoded as base64. To use with the verification API, prepend `ed25519:` prefix.
+
+### Controller Verification
+
+Always verify the `controller` field matches the expected namespace DID to prevent DID document spoofing.
+
+### Signature Verification
+
+When using DID documents to verify signatures, ensure:
+1. The signing key appears in `verificationMethod`
+2. The key's `status` is `approved`
+3. The key's `service` matches your service
+4. The DID document is current (check `updated` timestamp)

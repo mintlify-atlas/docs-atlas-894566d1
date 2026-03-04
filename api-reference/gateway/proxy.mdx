@@ -1,0 +1,492 @@
+---
+title: "Proxy Endpoints"
+description: "HTTP proxy with signature verification and credential injection"
+---
+
+## Overview
+
+Gateway proxy endpoints forward signed HTTP requests to configured upstream services after validating:
+
+1. RFC 9421 signature verification
+2. Nonce replay protection
+3. Approved claim validation
+4. Connection configuration and secrets
+
+Upon successful validation, Gateway injects connector-managed credentials and strips Sigilum signing headers before forwarding to the upstream.
+
+## Proxy Request Flow
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Gateway
+    participant Nonce Cache
+    participant Claims Cache
+    participant BadgerDB
+    participant Upstream
+
+    Client->>Gateway: POST /proxy/slack-proxy/chat.postMessage
+    Note over Client,Gateway: Headers: signature-input, signature, sigilum-*
+    
+    Gateway->>Gateway: 1. Verify signature headers present
+    Gateway->>Gateway: 2. Verify RFC 9421 signature
+    Gateway->>Gateway: 3. Validate signed component set
+    
+    Gateway->>Nonce Cache: 4. Check nonce replay
+    Nonce Cache-->>Gateway: Not seen
+    
+    Gateway->>Claims Cache: 5. Validate approved claim
+    Note over Gateway,Claims Cache: Check (namespace, public_key, service)
+    Claims Cache-->>Gateway: Approved
+    
+    Gateway->>BadgerDB: 6. Resolve connection config + secret
+    BadgerDB-->>Gateway: Connection with decrypted secret
+    
+    Gateway->>Gateway: 7. Strip Sigilum headers
+    Gateway->>Gateway: 8. Inject auth header (Bearer token)
+    
+    Gateway->>Upstream: POST /chat.postMessage
+    Note over Gateway,Upstream: Headers: Authorization: Bearer xoxb-...
+    Upstream-->>Gateway: 200 OK with response
+    Gateway-->>Client: 200 OK with response
+```
+
+## Generic Proxy Endpoint
+
+<api method="any" endpoint="/proxy/{connection_id}/{proxy_path}">
+  Forward signed request to configured connection
+</api>
+
+<ParamField path="connection_id" type="string" required>
+  Connection identifier configured in Gateway (e.g., `slack-proxy`, `linear-api`)
+</ParamField>
+
+<ParamField path="proxy_path" type="string" required>
+  Upstream path to forward (e.g., `chat.postMessage`, `api/v1/issues`)
+</ParamField>
+
+### Required Headers
+
+All proxy requests require Sigilum signature headers:
+
+<ParamField header="signature-input" type="string" required>
+  RFC 9421 Signature-Input header
+  
+  Example: `sig1=("@method" "@path" "@authority" "content-digest" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-nonce");created=1709550000;keyid="key-abc123";nonce="nonce_xyz789"`
+</ParamField>
+
+<ParamField header="signature" type="string" required>
+  RFC 9421 Signature header with base64-encoded signature
+  
+  Example: `sig1=:MEUCIA...:==`
+</ParamField>
+
+<ParamField header="sigilum-namespace" type="string" required>
+  Sigilum namespace identifier
+</ParamField>
+
+<ParamField header="sigilum-subject" type="string" required>
+  Stable requester identifier within namespace (user ID, employee ID, or app principal)
+</ParamField>
+
+<ParamField header="sigilum-agent-key" type="string" required>
+  Base64-encoded public key of signing agent
+</ParamField>
+
+<ParamField header="sigilum-agent-cert" type="string" required>
+  Agent certificate for signature verification
+</ParamField>
+
+### Signed Component Requirements
+
+The `signature-input` header must include these components:
+
+- `@method` - HTTP method
+- `@path` - Request path
+- `@authority` - Host authority
+- `content-digest` - SHA-256 digest of request body (if body present)
+- `sigilum-namespace`
+- `sigilum-subject`
+- `sigilum-agent-key`
+- `sigilum-nonce` - Unique nonce for replay protection
+
+Additional parameters:
+
+- `created` - Unix timestamp of signature creation
+- `keyid` - Key identifier
+- `nonce` - Nonce value (must match `sigilum-nonce` header)
+
+<Warning>
+If the signed component set doesn't match the required profile, Gateway returns `AUTH_SIGNED_COMPONENTS_INVALID` (403).
+</Warning>
+
+### Response
+
+<ResponseField name="(varies)" type="any">
+  Gateway forwards the upstream response body transparently
+</ResponseField>
+
+<ResponseField name="(error)" type="object">
+  On auth failure, returns error envelope:
+  
+  - `error` (string) - Human-readable error summary
+  - `code` (string) - Error code from taxonomy
+  - `request_id` (string) - Correlation ID
+  - `timestamp` (string) - RFC3339 UTC timestamp
+  - `docs_url` (string) - Remediation reference URL
+</ResponseField>
+
+### Example: Slack Message
+
+```bash
+curl -X POST https://localhost:38100/proxy/slack-proxy/chat.postMessage \
+  -H 'Content-Type: application/json' \
+  -H 'signature-input: sig1=("@method" "@path" "@authority" "content-digest" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-nonce");created=1709550000;keyid="key-abc";nonce="nonce_xyz"' \
+  -H 'signature: sig1=:MEUCIA...:' \
+  -H 'sigilum-namespace: acme-corp' \
+  -H 'sigilum-subject: user_alice' \
+  -H 'sigilum-agent-key: MFkwEwYHK...' \
+  -H 'sigilum-agent-cert: MIIBkTC...' \
+  -H 'sigilum-nonce: nonce_xyz' \
+  -H 'content-digest: sha-256=:X48E9qOokqqrvdts8nOJRJN3OWDUoyWxBf7kbu9DBPE=:' \
+  -d '{
+    "channel": "C1234567890",
+    "text": "Hello from Gateway!"
+  }'
+```
+
+**Gateway Processing:**
+
+1. Verifies signature with `sigilum-agent-key`
+2. Checks `nonce_xyz` not seen before for `acme-corp` namespace
+3. Validates `(acme-corp, MFkwEwYHK..., slack-proxy)` approved claim exists
+4. Resolves `slack-proxy` connection config and decrypts secret
+5. Strips all `sigilum-*`, `signature*`, `content-digest` headers
+6. Injects `Authorization: Bearer xoxb-...` header
+7. Forwards to `https://slack.com/api/chat.postMessage`
+
+**Success Response (200 OK):**
+
+```json
+{
+  "ok": true,
+  "channel": "C1234567890",
+  "ts": "1709550123.000000",
+  "message": {
+    "text": "Hello from Gateway!",
+    "username": "bot",
+    "bot_id": "B1234567890",
+    "type": "message",
+    "subtype": "bot_message",
+    "ts": "1709550123.000000"
+  }
+}
+```
+
+### Example: Auth Failure
+
+```json
+{
+  "error": "replay detected",
+  "code": "AUTH_REPLAY_DETECTED",
+  "request_id": "req_9k3j2h1",
+  "timestamp": "2026-03-04T10:30:15Z",
+  "docs_url": "https://docs.sigilum.id/gateway-errors#AUTH_REPLAY_DETECTED"
+}
+```
+
+## Slack Alias Endpoint
+
+<api method="any" endpoint="/slack/{slack_path}">
+  Convenience alias for Slack requests (maps to `slack-proxy` connection)
+</api>
+
+<ParamField path="slack_path" type="string" required>
+  Slack API path (e.g., `chat.postMessage`, `users.list`)
+</ParamField>
+
+<Note>
+The `/slack/*` route is hardcoded to connection ID `slack-proxy`. This alias cannot be changed via environment variables.
+</Note>
+
+### Example: Slack Alias
+
+```bash
+curl -X POST https://localhost:38100/slack/chat.postMessage \
+  -H 'Content-Type: application/json' \
+  -H 'signature-input: ...' \
+  -H 'signature: ...' \
+  -H 'sigilum-namespace: acme-corp' \
+  -H 'sigilum-subject: user_alice' \
+  # ... (same signature headers as generic proxy)
+  -d '{"channel": "C123", "text": "Hello"}'
+```
+
+This is equivalent to:
+
+```bash
+curl -X POST https://localhost:38100/proxy/slack-proxy/chat.postMessage ...
+```
+
+## Auth Modes
+
+Gateway supports three credential injection modes when forwarding to upstream:
+
+### Bearer Token (`auth_mode: "bearer"`)
+
+Injects `Authorization` header with Bearer token:
+
+```
+Authorization: Bearer <secret>
+```
+
+**Connection Configuration:**
+
+```json
+{
+  "auth_mode": "bearer",
+  "auth_header_name": "Authorization",
+  "auth_prefix": "Bearer ",
+  "auth_secret_key": "bot_token",
+  "secrets": {
+    "bot_token": "xoxb-1234567890-abcdefghij"
+  }
+}
+```
+
+### Header Key (`auth_mode: "header_key"`)
+
+Injects custom header with secret:
+
+```
+X-API-Key: <secret>
+```
+
+**Connection Configuration:**
+
+```json
+{
+  "auth_mode": "header_key",
+  "auth_header_name": "X-API-Key",
+  "auth_prefix": "",
+  "auth_secret_key": "api_key",
+  "secrets": {
+    "api_key": "sk_live_abc123xyz789"
+  }
+}
+```
+
+### Query Parameter (`auth_mode: "query_param"`)
+
+Appends secret to query string:
+
+```
+https://api.example.com/endpoint?api_key=<secret>
+```
+
+**Connection Configuration:**
+
+```json
+{
+  "auth_mode": "query_param",
+  "auth_header_name": "api_key",
+  "auth_prefix": "",
+  "auth_secret_key": "api_key",
+  "secrets": {
+    "api_key": "secret_xyz789"
+  }
+}
+```
+
+<Warning>
+Query parameter mode exposes credentials in URLs. Only use for services that require this pattern.
+</Warning>
+
+## Shared Credential Variables
+
+Gateway supports reusable credential variables referenced across multiple connections:
+
+**Define Shared Variable:**
+
+```bash
+curl -X POST http://localhost:38100/api/admin/credential-variables \
+  -H 'Content-Type: application/json' \
+  -H 'sigilum-subject: user_alice' \
+  -d '{
+    "key": "OPENAI_API_KEY",
+    "value": "sk-proj-abc123xyz789"
+  }'
+```
+
+**Reference in Connection:**
+
+```json
+{
+  "id": "openai-api",
+  "name": "OpenAI API",
+  "protocol": "http",
+  "base_url": "https://api.openai.com",
+  "auth_mode": "bearer",
+  "auth_header_name": "Authorization",
+  "auth_prefix": "Bearer ",
+  "auth_secret_key": "api_key",
+  "secrets": {
+    "api_key": "{{OPENAI_API_KEY}}"
+  }
+}
+```
+
+Gateway resolves `{{OPENAI_API_KEY}}` at runtime from shared variables store.
+
+<Tip>
+Shared variables include `created_by_subject` for audit traceability. The `sigilum-subject` header takes precedence over request body when creating variables.
+</Tip>
+
+## Unsigned Proxy Mode (Development)
+
+For local development, Gateway can bypass signature verification for specific connections:
+
+**Configuration:**
+
+```bash
+GATEWAY_ALLOW_UNSIGNED_PROXY=true
+GATEWAY_ALLOW_UNSIGNED_CONNECTIONS=slack-proxy,linear-api
+```
+
+<Warning>
+**Never enable unsigned proxy mode in production.** This bypasses all Sigilum auth checks and should only be used for local testing.
+</Warning>
+
+## Error Scenarios
+
+### Missing Required Headers
+
+**Request:**
+
+```bash
+curl -X POST https://localhost:38100/proxy/slack-proxy/chat.postMessage \
+  -H 'Content-Type: application/json' \
+  -d '{"channel": "C123", "text": "Hello"}'
+# Missing signature headers
+```
+
+**Response (403 Forbidden):**
+
+```json
+{
+  "error": "invalid or duplicate signed headers",
+  "code": "AUTH_HEADERS_INVALID",
+  "request_id": "req_abc123",
+  "timestamp": "2026-03-04T10:30:00Z"
+}
+```
+
+### Invalid Signature
+
+**Response (403 Forbidden):**
+
+```json
+{
+  "error": "signature verification failed",
+  "code": "AUTH_SIGNATURE_INVALID",
+  "request_id": "req_def456",
+  "timestamp": "2026-03-04T10:31:00Z"
+}
+```
+
+### Claim Not Approved
+
+**Response (403 Forbidden):**
+
+```json
+{
+  "error": "caller is not currently approved for the requested service",
+  "code": "AUTH_CLAIM_REQUIRED",
+  "request_id": "req_ghi789",
+  "timestamp": "2026-03-04T10:32:00Z"
+}
+```
+
+### Connection Not Found
+
+**Response (404 Not Found):**
+
+```json
+{
+  "error": "connection not found",
+  "code": "CONNECTION_NOT_FOUND",
+  "request_id": "req_jkl012",
+  "timestamp": "2026-03-04T10:33:00Z"
+}
+```
+
+### Upstream Timeout
+
+**Response (504 Gateway Timeout):**
+
+```json
+{
+  "error": "upstream request timeout",
+  "code": "UPSTREAM_TIMEOUT",
+  "request_id": "req_mno345",
+  "timestamp": "2026-03-04T10:34:00Z"
+}
+```
+
+## Rotation Enforcement
+
+Gateway can enforce credential rotation policies:
+
+```bash
+GATEWAY_ROTATION_ENFORCEMENT=block  # off | warn | block
+GATEWAY_ROTATION_GRACE_DAYS=90
+```
+
+In `block` mode, overdue connections return:
+
+**Response (403 Forbidden):**
+
+```json
+{
+  "error": "credential rotation required",
+  "code": "ROTATION_REQUIRED",
+  "request_id": "req_pqr678",
+  "timestamp": "2026-03-04T10:35:00Z"
+}
+```
+
+## Decision Logging
+
+When `GATEWAY_LOG_PROXY_REQUESTS=true`, Gateway emits structured JSON decision logs:
+
+```json
+{
+  "level": "info",
+  "type": "gateway_decision",
+  "decision_type": "proxy_auth_denied",
+  "request_id": "req_abc123",
+  "connection": "[redacted]",
+  "namespace": "[hashed]",
+  "subject": "[hashed]",
+  "remote_ip": "192.168.1.0",
+  "stage": "replay_detection",
+  "decision": "deny",
+  "reason_code": "AUTH_REPLAY_DETECTED",
+  "timestamp": "2026-03-04T10:30:15Z"
+}
+```
+
+<Note>
+Gateway automatically redacts secret-bearing fields, hashes identity fields, and masks client IPs before logging.
+</Note>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="MCP Runtime" icon="arrow-right" href="/api-reference/gateway/mcp">
+    Explore MCP tool discovery and execution
+  </Card>
+  <Card title="Admin Endpoints" icon="arrow-right" href="/api-reference/gateway/admin">
+    Manage connections and credentials
+  </Card>
+</CardGroup>

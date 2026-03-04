@@ -1,0 +1,649 @@
+---
+title: Security Considerations
+description: Security architecture, threat model, and best practices for Sigilum protocol
+---
+
+## Security Architecture
+
+The Sigilum protocol implements a defense-in-depth security model with multiple layers of protection:
+
+### Cryptographic Foundation
+
+**Ed25519 signatures** provide the core security primitive:
+- 128-bit security strength
+- Fast signature generation and verification
+- Small signature size (64 bytes)
+- Resistant to timing attacks
+- No random number generation required during signing
+
+**Key properties:**
+- Private keys are 32 bytes
+- Public keys are 32 bytes
+- Signatures are 64 bytes
+- Deterministic signature generation
+
+### Local-First Security Model
+
+**Identity creation and signing are local operations:**
+- No hosted dependency required at agent runtime
+- Private keys never leave the local machine
+- Identity files stored in `~/.sigilum/identities/<namespace>/`
+- Verification is deterministic and offline-capable for signature checks
+
+**Storage security:**
+- Identity files should use filesystem permissions (recommended: `0600`)
+- Private keys stored in plaintext locally (rely on OS-level protection)
+- Future: Hardware security module (HSM) support for production deployments
+
+## Threat Model
+
+### Protected Against
+
+The protocol protects against:
+
+#### 1. Man-in-the-Middle Attacks
+
+**Protection:** Ed25519 signatures ensure message authenticity and integrity.
+
+**Attack scenario:** Attacker intercepts and modifies request.
+
+**Defense:** Any modification invalidates the signature. Signature verification fails.
+
+#### 2. Replay Attacks
+
+**Protection:** Nonce and timestamp validation.
+
+**Attack scenario:** Attacker captures valid signed request and replays it.
+
+**Defense mechanisms:**
+- **Nonce uniqueness**: Each request includes a unique nonce (UUID v4)
+- **Nonce tracking**: Services track seen nonces within timestamp window
+- **Timestamp freshness**: `created` timestamp must be recent
+- **Bounded replay window**: Implementation-defined maximum age (e.g., 5 minutes)
+
+**Implementation:**
+```typescript
+// Pseudocode for replay protection
+function verifyReplayProtection(created: number, nonce: string) {
+  const now = Date.now() / 1000;
+  const maxAge = 300; // 5 minutes
+  
+  // Check timestamp freshness
+  if (now - created > maxAge) {
+    throw new Error('SIG_EXPIRED');
+  }
+  
+  // Check nonce uniqueness
+  if (seenNonces.has(nonce)) {
+    throw new Error('SIG_NONCE_REPLAY');
+  }
+  
+  // Store nonce with TTL
+  seenNonces.set(nonce, created + maxAge);
+}
+```
+
+#### 3. Body Tampering
+
+**Protection:** `content-digest` header with SHA-256 hash.
+
+**Attack scenario:** Attacker modifies request body but keeps headers.
+
+**Defense:** Content-digest mismatch detected during verification.
+
+**Example:**
+```http
+Original body: {"action":"approve"}
+Content-Digest: sha-256=:5toCTO6LRikiTvJ0Ha+F6ucUxaTs3wMsnaImDBR0NZg=:
+
+Tampered body: {"action":"deny"}
+Verification: FAILED - SIG_CONTENT_DIGEST_MISMATCH
+```
+
+#### 4. Header Tampering
+
+**Protection:** All Sigilum headers are included in signature.
+
+**Attack scenario:** Attacker modifies `sigilum-namespace` to impersonate another namespace.
+
+**Defense:** Modified header invalidates signature.
+
+**Signed headers:**
+- `sigilum-namespace`
+- `sigilum-subject`
+- `sigilum-agent-key`
+- `sigilum-agent-cert`
+
+#### 5. Key Substitution
+
+**Protection:** Certificate binding.
+
+**Attack scenario:** Attacker provides their own key and certificate.
+
+**Defense mechanisms:**
+- Certificate includes namespace binding
+- Certificate proof signed by the agent key itself
+- Namespace authorization checked against registry
+- Key must be approved for the namespace/service combination
+
+#### 6. Downgrade Attacks
+
+**Protection:** Single supported algorithm (Ed25519).
+
+**Attack scenario:** Attacker attempts to downgrade to weaker algorithm.
+
+**Defense:** Only `alg="ed25519"` is accepted. No algorithm negotiation.
+
+### NOT Protected Against
+
+The protocol does NOT protect against:
+
+#### 1. Compromised Private Keys
+
+If an agent's private key is compromised:
+- Attacker can sign valid requests
+- Attacker can impersonate the agent
+
+**Mitigation:**
+- Detect unusual activity patterns
+- Revoke compromised key: `revokeClaimDirect(namespace, publicKey, service)`
+- Rotate to new key
+- Future: Hardware security modules (HSMs)
+
+#### 2. Compromised Namespace Owner
+
+If namespace owner account is compromised:
+- Attacker can approve malicious agents
+- Attacker can transfer namespace ownership
+
+**Mitigation:**
+- Strong authentication for namespace owner
+- Multi-signature approval for critical operations
+- Audit logging of all namespace operations
+- Regular review of authorized agents
+
+#### 3. Local Filesystem Access
+
+If attacker gains local filesystem access:
+- Can read private keys from `~/.sigilum/identities/`
+- Can exfiltrate identity files
+
+**Mitigation:**
+- OS-level filesystem permissions
+- Full-disk encryption
+- Secure workstation practices
+- Future: Encrypted identity storage with passphrase
+
+#### 4. Side-Channel Attacks
+
+Timing, power analysis, or other side-channel attacks:
+- Ed25519 is designed to be resistant to timing attacks
+- Implementation-dependent vulnerabilities possible
+
+**Mitigation:**
+- Use vetted cryptographic libraries
+- Regular security audits
+- Follow constant-time implementation practices
+
+## Authentication and Authorization
+
+### Two-Level Security Model
+
+Sigilum separates authentication from authorization:
+
+#### 1. Signature Verification (Authentication)
+
+**Proves:**
+- Request came from holder of private key
+- Request has not been tampered with
+- Request is fresh (not replayed)
+
+**Does NOT prove:**
+- Agent is authorized for the specific operation
+- Subject has permission for the resource
+
+#### 2. Namespace Authorization (Authorization)
+
+**Checks:**
+- Agent key is approved for namespace/service
+- Subject has permission for the operation
+- Service-specific authorization rules
+
+**Example flow:**
+```typescript
+// 1. Verify signature (authentication)
+await verifyHttpSignature(request);
+
+// 2. Check namespace authorization
+const authorized = await registry.isAuthorized(
+  namespace,
+  publicKey,
+  service
+);
+
+if (!authorized) {
+  throw new Error('Agent not authorized for namespace/service');
+}
+
+// 3. Check subject permissions (application-specific)
+if (!canAccessResource(subject, resource)) {
+  throw new Error('Subject not authorized for resource');
+}
+```
+
+### Subject-Level Authorization
+
+The `sigilum-subject` header enables fine-grained authorization:
+
+**Use cases:**
+- MCP tool filtering per user
+- Resource access control
+- Rate limiting per subject
+- Audit trail attribution
+
+**Example policy:**
+```typescript
+// Allow customer-12345 to access only their own data
+function canAccessCustomerData(subject: string, customerId: string): boolean {
+  return subject === `customer-${customerId}`;
+}
+
+// Restrict certain MCP tools to admin users
+function canUseTool(subject: string, tool: string): boolean {
+  const adminSubjects = ['admin-alice', 'admin-bob'];
+  const restrictedTools = ['delete-user', 'transfer-namespace'];
+  
+  if (restrictedTools.includes(tool)) {
+    return adminSubjects.includes(subject);
+  }
+  
+  return true;
+}
+```
+
+## Key Management
+
+### Key Lifecycle
+
+**Creation:**
+```typescript
+// SDKs handle key generation
+const identity = await initIdentity('my-namespace');
+// Private key stored in ~/.sigilum/identities/my-namespace/identity.json
+```
+
+**Storage:**
+- Private keys stored in local filesystem
+- Public keys registered in DID Document
+- Certificate binds key to namespace
+
+**Rotation:**
+```typescript
+// 1. Generate new key
+const newIdentity = await initIdentity('my-namespace', { rotate: true });
+
+// 2. Approve new key
+await approveClaimDirect(namespace, newPublicKey, service, agentIP);
+
+// 3. Update agents to use new key
+// 4. Revoke old key
+await revokeClaimDirect(namespace, oldPublicKey, service);
+```
+
+**Revocation:**
+```typescript
+// Immediate revocation
+await revokeClaimDirect(namespace, publicKey, service);
+
+// Or via claim ID
+await revokeClaim(claimId);
+```
+
+### Best Practices
+
+**DO:**
+- Generate keys locally using cryptographically secure random number generator
+- Store private keys with restrictive filesystem permissions (`0600`)
+- Rotate keys regularly (e.g., every 90 days)
+- Revoke keys immediately upon suspected compromise
+- Use separate keys per service when possible
+- Audit approved keys regularly
+
+**DON'T:**
+- Share private keys between agents
+- Transmit private keys over network
+- Store private keys in version control
+- Log private keys
+- Use the same key across multiple namespaces
+
+## Certificate Security
+
+### Certificate Structure
+
+Certificates are self-signed proofs binding a key to a namespace:
+
+```json
+{
+  "version": 1,
+  "namespace": "fixture-alice",
+  "did": "did:sigilum:fixture-alice",
+  "keyId": "did:sigilum:fixture-alice#ed25519-99fb00dc16ee555a",
+  "publicKey": "ed25519:J07dj/co4diCmQYTTQGq4adhnMKYejHazCYUQ7eBh0k=",
+  "issuedAt": "2026-02-20T18:04:26Z",
+  "expiresAt": null,
+  "proof": {
+    "alg": "ed25519",
+    "sig": "vGp-WLmSr0BWNci2lBhcJORg39ot-3Uu1aaVG2wGEKLItK_964hFaRrVd7DHf_2e3ykGpIacoM9Q5gs_tPy6Dw"
+  },
+  "issuedBy": "sigilum.local-fixture"
+}
+```
+
+### Certificate Validation
+
+Verifiers MUST check:
+
+1. **Proof signature**: Verify `proof.sig` against canonical certificate text
+2. **Namespace consistency**: Certificate namespace matches request header
+3. **Key consistency**: Certificate public key matches request header
+4. **KeyID format**: `keyId` follows `did:sigilum:<namespace>#ed25519-<suffix>` format
+5. **Expiration**: If `expiresAt` is set, certificate must not be expired
+6. **Registry authorization**: Key must be approved in namespace registry
+
+### Certificate Expiration
+
+**Current behavior:**
+- Most certificates have `expiresAt: null` (no expiration)
+- Expiration is optional
+
+**Future considerations:**
+- Enforce maximum certificate lifetime (e.g., 1 year)
+- Require periodic re-certification
+- Automated certificate renewal
+
+## Replay Protection
+
+### Nonce Management
+
+Services MUST track nonces to prevent replay attacks:
+
+**Storage requirements:**
+- Store nonce with timestamp
+- Index by nonce for fast lookup
+- Expire entries after maximum request age
+
+**Example implementation:**
+```typescript
+class NonceStore {
+  private nonces = new Map<string, number>();
+  private maxAge = 300; // 5 minutes
+  
+  check(nonce: string, created: number): void {
+    // Clean up expired nonces
+    this.cleanup();
+    
+    // Check if nonce was used
+    if (this.nonces.has(nonce)) {
+      throw new Error('SIG_NONCE_REPLAY');
+    }
+    
+    // Store nonce with expiration
+    this.nonces.set(nonce, created + this.maxAge);
+  }
+  
+  private cleanup(): void {
+    const now = Date.now() / 1000;
+    for (const [nonce, expiry] of this.nonces) {
+      if (expiry < now) {
+        this.nonces.delete(nonce);
+      }
+    }
+  }
+}
+```
+
+**Distributed systems:**
+- Share nonce store across service replicas
+- Use Redis or similar for shared state
+- Accept small race condition window (duplicate nonce detection is best-effort)
+
+### Timestamp Validation
+
+**Clock skew tolerance:**
+- Accept timestamps slightly in the future (e.g., +30 seconds)
+- Accept timestamps within maximum age (e.g., -5 minutes)
+
+**Example:**
+```typescript
+function validateTimestamp(created: number): void {
+  const now = Date.now() / 1000;
+  const maxAge = 300; // 5 minutes
+  const maxSkew = 30; // 30 seconds
+  
+  if (created > now + maxSkew) {
+    throw new Error('SIG_TIMESTAMP_FUTURE');
+  }
+  
+  if (now - created > maxAge) {
+    throw new Error('SIG_EXPIRED');
+  }
+}
+```
+
+## Content Integrity
+
+### Content-Digest Algorithm
+
+**Required algorithm:** SHA-256
+
+**Format:** RFC 9530 structured field:
+```text
+sha-256=:base64-encoded-hash:
+```
+
+### Body Hashing
+
+**Process:**
+1. Take raw request body bytes (before any parsing)
+2. Compute SHA-256 hash
+3. Encode hash in base64
+4. Format as `sha-256=:hash:`
+
+**Example (TypeScript):**
+```typescript
+import { createHash } from 'crypto';
+
+function computeContentDigest(body: string | Buffer): string {
+  const hash = createHash('sha256')
+    .update(body)
+    .digest('base64');
+  return `sha-256=:${hash}:`;
+}
+
+const body = JSON.stringify({ action: 'approve' });
+const digest = computeContentDigest(body);
+// sha-256=:5toCTO6LRikiTvJ0Ha+F6ucUxaTs3wMsnaImDBR0NZg=:
+```
+
+**Example (Python):**
+```python
+import hashlib
+import base64
+
+def compute_content_digest(body: bytes) -> str:
+    hash = hashlib.sha256(body).digest()
+    encoded = base64.b64encode(hash).decode('ascii')
+    return f'sha-256=:{encoded}:'
+
+body = b'{"action":"approve"}'
+digest = compute_content_digest(body)
+# sha-256=:5toCTO6LRikiTvJ0Ha+F6ucUxaTs3wMsnaImDBR0NZg=:
+```
+
+### Verification
+
+**Requirements:**
+- Compute digest from received body
+- Compare to `content-digest` header value
+- Comparison MUST be constant-time to prevent timing attacks
+
+**Example:**
+```typescript
+function verifyContentDigest(body: Buffer, headerValue: string): void {
+  const computed = computeContentDigest(body);
+  
+  // Constant-time comparison
+  if (!timingSafeEqual(
+    Buffer.from(computed),
+    Buffer.from(headerValue)
+  )) {
+    throw new Error('SIG_CONTENT_DIGEST_MISMATCH');
+  }
+}
+```
+
+## Network Security
+
+### Transport Security
+
+**HTTPS required:**
+- All production traffic MUST use HTTPS
+- TLS 1.2 or higher
+- Strong cipher suites only
+
+**Why signatures aren't enough:**
+- Signatures prove authenticity and integrity
+- HTTPS provides confidentiality (encryption)
+- HTTPS prevents passive eavesdropping
+
+### API Endpoints
+
+**Protected endpoints:**
+- `/v1/*` - All API endpoints
+- `/.well-known/*` - DID resolution endpoints
+
+**Unprotected endpoints:**
+- `/health` - Health checks
+- `/metrics` - Prometheus metrics (if enabled)
+
+**Enforcement:**
+```typescript
+// Middleware to enforce signatures
+app.use('/v1/*', requireSignature);
+app.use('/.well-known/*', requireSignature);
+
+async function requireSignature(req, res, next) {
+  try {
+    await verifyHttpSignature(req);
+    next();
+  } catch (error) {
+    res.status(401).json({
+      error: 'Signature verification failed',
+      code: error.code,
+      reason: error.message
+    });
+  }
+}
+```
+
+## Audit and Monitoring
+
+### Audit Logging
+
+**Log all authentication events:**
+- Successful signature verifications
+- Failed signature verifications
+- Namespace operations (approve, revoke, transfer)
+- Unusual patterns (rate limiting, geo-location)
+
+**Example log entry:**
+```json
+{
+  "timestamp": "2026-03-04T12:34:56Z",
+  "event": "signature_verified",
+  "namespace": "alice",
+  "subject": "customer-12345",
+  "service": "openai",
+  "agent_key_id": "did:sigilum:alice#ed25519-99fb00dc16ee555a",
+  "method": "POST",
+  "path": "/v1/claims",
+  "ip": "203.0.113.42"
+}
+```
+
+### Security Monitoring
+
+**Monitor for:**
+- Sudden increase in signature verification failures
+- Replay attack attempts (nonce reuse)
+- Unauthorized namespace access attempts
+- Key usage from unexpected IP addresses
+- Unusual request patterns (rate, timing)
+
+**Alert on:**
+- Multiple signature failures from same namespace
+- Nonce replay detection
+- Unauthorized claim approval attempts
+- Key compromise indicators
+
+## Security Best Practices
+
+### For Namespace Owners
+
+1. **Secure namespace account** with strong authentication
+2. **Review authorized agents** regularly
+3. **Revoke unused keys** promptly
+4. **Monitor audit logs** for unusual activity
+5. **Use subject identifiers** accurately
+6. **Rotate keys** periodically
+7. **Enable multi-signature** approval for critical operations (future)
+
+### For Agent Operators
+
+1. **Protect private keys** with filesystem permissions
+2. **Use separate keys** per service when possible
+3. **Monitor for compromised keys**
+4. **Rotate keys** every 90 days
+5. **Never share keys** between agents
+6. **Use hardware security modules** for production (future)
+
+### For Service Operators
+
+1. **Enforce signature verification** on all protected endpoints
+2. **Implement replay protection** with nonce tracking
+3. **Validate all components** (method, URI, headers, body)
+4. **Check namespace authorization** after signature verification
+5. **Log all authentication events**
+6. **Monitor for attack patterns**
+7. **Use HTTPS** for all traffic
+8. **Implement rate limiting** per namespace/subject
+
+## Vulnerability Disclosure
+
+If you discover a security vulnerability in the Sigilum protocol or implementation:
+
+1. **Do NOT** open a public GitHub issue
+2. **Email** security@sigilum.id with:
+   - Description of the vulnerability
+   - Steps to reproduce
+   - Potential impact
+   - Suggested fix (if any)
+3. **Allow 90 days** for remediation before public disclosure
+4. **Coordinate** disclosure timeline with Sigilum team
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Protocol Overview" icon="book" href="/protocol/overview">
+    High-level protocol documentation
+  </Card>
+  <Card title="Signing Profile" icon="signature" href="/protocol/signing-profile">
+    RFC 9421 signing profile details
+  </Card>
+  <Card title="DID Method" icon="fingerprint" href="/protocol/did-method">
+    DID method specification
+  </Card>
+  <Card title="TypeScript SDK" icon="code" href="/sdks/typescript">
+    SDK implementation and usage
+  </Card>
+</CardGroup>

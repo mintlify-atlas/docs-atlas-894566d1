@@ -1,0 +1,295 @@
+---
+title: 'Verification'
+description: 'Verify agent authorization status for a namespace and service'
+---
+
+## Overview
+
+The verification endpoint provides a fast lookup to check whether an agent (identified by public key) is currently authorized to access a service within a namespace.
+
+This is the primary runtime authorization check used by services to validate incoming requests.
+
+## Verify Agent Authorization
+
+<ParamField path="GET /v1/verify" type="endpoint">
+  Check whether a public key is currently approved for a service/namespace pair.
+</ParamField>
+
+Requires signed headers with valid agent certificate. Optimized for high-throughput (2000 req/min rate limit).
+
+### Query Parameters
+
+<ParamField query="namespace" type="string" required>
+  Namespace identifier to check authorization against.
+  
+  **Example:** `acme-corp`
+</ParamField>
+
+<ParamField query="public_key" type="string" required>
+  Agent's Ed25519 public key (format: `ed25519:<base64>`).
+  
+  **Example:** `ed25519:LS0tLS1CRUdJTi...`
+</ParamField>
+
+<ParamField query="service" type="string" required>
+  Service slug to check authorization for.
+  
+  **Example:** `my-service`
+</ParamField>
+
+### Response
+
+<ResponseField name="authorized" type="boolean" required>
+  Whether the agent is currently authorized.
+  
+  - `true` - Agent has an active approved authorization
+  - `false` - Agent is not authorized (pending, rejected, revoked, or never requested)
+</ResponseField>
+
+<ResponseField name="claim_id" type="string">
+  Claim identifier (only present when `authorized: true`).
+</ResponseField>
+
+<ResponseField name="approved_at" type="string">
+  ISO 8601 timestamp when authorization was approved (only present when `authorized: true`).
+</ResponseField>
+
+<ResponseField name="reason" type="string">
+  Human-readable reason when `authorized: false`.
+  
+  **Examples:**
+  - `"No approved authorization found"`
+  - `"Authorization revoked"`
+  - `"Authorization pending approval"`
+</ResponseField>
+
+## Example: Authorized Agent
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://api.sigilum.id/v1/verify?namespace=acme-corp&public_key=ed25519:LS0tLS1CRUdJTi...&service=my-service' \
+  -H 'signature-input: sig1=("@method" "@target-uri" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=1705320000;keyid="agent-key-1";alg="ed25519";nonce="n123"' \
+  -H 'signature: sig1=:MEUCIQDx...==:' \
+  -H 'sigilum-namespace: acme-corp' \
+  -H 'sigilum-subject: user@example.com' \
+  -H 'sigilum-agent-key: ed25519:LS0tLS...' \
+  -H 'sigilum-agent-cert: eyJ2ZXJzaW9u...'
+```
+
+```json Response (Authorized)
+{
+  "authorized": true,
+  "claim_id": "claim_abc123",
+  "approved_at": "2024-01-15T10:35:00Z"
+}
+```
+
+```json Response (Not Authorized)
+{
+  "authorized": false,
+  "reason": "No approved authorization found"
+}
+```
+
+</CodeGroup>
+
+## Example: Using JavaScript SDK
+
+```javascript
+import { SigilumClient } from '@sigilum/sdk';
+
+const client = new SigilumClient({
+  baseUrl: 'https://api.sigilum.id',
+  namespace: 'acme-corp',
+  subject: 'user@example.com',
+  privateKey: agentPrivateKey,
+  certificate: agentCertificate,
+});
+
+const result = await client.verify({
+  namespace: 'acme-corp',
+  publicKey: 'ed25519:LS0tLS1CRUdJTi...',
+  service: 'my-service',
+});
+
+if (result.authorized) {
+  console.log('Agent is authorized');
+  console.log('Claim ID:', result.claim_id);
+  console.log('Approved at:', result.approved_at);
+} else {
+  console.log('Agent is not authorized');
+  console.log('Reason:', result.reason);
+}
+```
+
+## Performance Considerations
+
+### Caching Strategy
+
+For high-volume services, consider caching verification results locally:
+
+1. **Initial Load**: Use `GET /v1/namespaces/claims` to bulk-load all approved authorizations
+2. **Local Cache**: Store results in Redis, in-memory cache, or local database
+3. **Incremental Updates**: Subscribe to webhooks for real-time authorization changes
+4. **Fallback**: Query `/v1/verify` on cache miss
+
+### Example Caching Flow
+
+```javascript
+class AuthorizationCache {
+  constructor() {
+    this.cache = new Map(); // or Redis
+    this.loadInitialData();
+    this.subscribeToWebhooks();
+  }
+
+  async loadInitialData() {
+    // Bulk load approved claims
+    const response = await client.listApprovedClaims({
+      service: 'my-service',
+      limit: 2000,
+    });
+    
+    for (const claim of response.claims) {
+      const key = `${claim.namespace}:${claim.public_key}:${claim.service}`;
+      this.cache.set(key, {
+        authorized: true,
+        claim_id: claim.claim_id,
+        approved_at: claim.approved_at,
+      });
+    }
+  }
+
+  async verify(namespace, publicKey, service) {
+    const key = `${namespace}:${publicKey}:${service}`;
+    
+    // Check cache
+    const cached = this.cache.get(key);
+    if (cached !== undefined) {
+      return cached;
+    }
+    
+    // Cache miss - query API
+    const result = await client.verify({ namespace, publicKey, service });
+    
+    // Cache result (with TTL for negative results)
+    if (result.authorized) {
+      this.cache.set(key, result);
+    }
+    
+    return result;
+  }
+
+  // Webhook handler
+  handleWebhook(event) {
+    const key = `${event.namespace}:${event.public_key}:${event.service}`;
+    
+    if (event.type === 'request.approved') {
+      this.cache.set(key, {
+        authorized: true,
+        claim_id: event.claim_id,
+        approved_at: event.approved_at,
+      });
+    } else if (event.type === 'request.revoked') {
+      this.cache.delete(key);
+    }
+  }
+}
+```
+
+## Error Responses
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 400 | `INVALID_REQUEST` | Missing or invalid query parameters |
+| 401 | `SIGNATURE_INVALID` | Invalid or missing signed headers |
+| 503 | `SERVICE_UNAVAILABLE` | Database unavailable |
+
+## Integration Patterns
+
+### Middleware Pattern
+
+Integrate verification as middleware in your API:
+
+```javascript
+import { verifyAuthorization } from './auth';
+
+app.use('/protected/*', async (req, res, next) => {
+  const publicKey = req.headers['x-agent-key'];
+  const namespace = req.headers['x-namespace'];
+  
+  const result = await authCache.verify(
+    namespace,
+    publicKey,
+    'my-service'
+  );
+  
+  if (!result.authorized) {
+    return res.status(403).json({
+      error: 'Unauthorized',
+      reason: result.reason,
+    });
+  }
+  
+  req.authContext = {
+    claimId: result.claim_id,
+    approvedAt: result.approved_at,
+    namespace,
+    publicKey,
+  };
+  
+  next();
+});
+```
+
+### Gateway Pattern
+
+Use the Sigilum Gateway to handle verification automatically:
+
+```yaml
+services:
+  - name: my-service
+    slug: my-service
+    upstream: http://localhost:3000
+    authorization:
+      verify_on_request: true
+      cache_ttl: 300
+```
+
+The gateway will:
+- Extract agent credentials from requests
+- Verify authorization (with caching)
+- Add authorization context to upstream headers
+- Block unauthorized requests
+
+## Security Considerations
+
+### Replay Protection
+
+Even for GET requests, signed headers include a nonce to prevent replay attacks. Each verification request requires a unique nonce.
+
+### Subject Verification
+
+The `sigilum-subject` header in the signed request should match your application's authenticated user. Use this to prevent privilege escalation:
+
+```javascript
+// Verify subject matches authenticated user
+if (authContext.subject !== req.user.email) {
+  return res.status(403).json({
+    error: 'Subject mismatch',
+  });
+}
+```
+
+### Public Key Rotation
+
+When rotating agent keys:
+1. Submit new authorization request with new key
+2. Wait for approval
+3. Update agent configuration to use new key
+4. Optionally revoke old authorization
+
+### Rate Limiting
+
+Verification endpoint has higher rate limits (2000 req/min) than other endpoints. However, implement local caching to minimize API calls and improve latency.

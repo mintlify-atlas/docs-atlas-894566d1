@@ -1,0 +1,410 @@
+---
+title: 'Authorizations'
+description: 'Submit, manage, and control authorization requests (claims)'
+---
+
+## Overview
+
+Authorization requests (internally called "claims" for compatibility) represent an agent's request to access a service within a namespace. The lifecycle:
+
+1. **Submit** - Service submits authorization request on behalf of agent
+2. **Pending** - Namespace owner reviews request
+3. **Approve/Reject** - Owner makes decision
+4. **Revoke** - Owner can revoke previously approved authorization
+
+## Submit Authorization Request
+
+<ParamField path="POST /v1/claims" type="endpoint">
+  Submit an authorization request on behalf of an agent.
+</ParamField>
+
+Requires service API key and signed headers.
+
+### Authentication
+
+<ParamField header="Authorization" type="string" required>
+  Service API key as Bearer token.
+  
+  ```
+  Bearer sk_live_...
+  ```
+</ParamField>
+
+Plus all standard signed headers including `content-digest`.
+
+### Request Body
+
+<ParamField body="namespace" type="string" required>
+  Target namespace identifier (3-64 characters).
+  
+  **Example:** `acme-corp`
+</ParamField>
+
+<ParamField body="public_key" type="string" required>
+  Agent's Ed25519 public key (format: `ed25519:<base64>`).
+  
+  **Example:** `ed25519:LS0tLS1CRUdJTi...`
+</ParamField>
+
+<ParamField body="service" type="string" required>
+  Service slug (must match authenticated service).
+  
+  **Example:** `my-service`
+</ParamField>
+
+<ParamField body="agent_ip" type="string" required>
+  IP address of the agent making the request.
+  
+  **Example:** `203.0.113.45`
+</ParamField>
+
+<ParamField body="nonce" type="string" required>
+  Unique nonce for replay protection (8-256 characters).
+  
+  **Example:** `abc123xyz789`
+</ParamField>
+
+<ParamField body="subject" type="string">
+  Subject identifier for user-scoped policies (1-256 characters).
+  
+  **Example:** `user@example.com`
+</ParamField>
+
+<ParamField body="agent_id" type="string">
+  Agent identifier (1-128 characters).
+  
+  **Example:** `agent-001`
+</ParamField>
+
+<ParamField body="agent_name" type="string">
+  Human-readable agent name (1-128 characters).
+  
+  **Example:** `Production Agent`
+</ParamField>
+
+### Response
+
+<ResponseField name="claim_id" type="string" required>
+  Unique claim identifier.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current claim status: `pending`, `approved`, `rejected`.
+  
+  - Returns 200 with `approved` or `pending` if claim already exists
+  - Returns 201 if new claim created
+</ResponseField>
+
+<ResponseField name="service" type="string" required>
+  Service slug.
+</ResponseField>
+
+<ResponseField name="message" type="string" required>
+  Human-readable status message.
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST 'https://api.sigilum.id/v1/claims' \
+  -H 'Authorization: Bearer sk_live_abc123...' \
+  -H 'signature-input: sig1=("@method" "@target-uri" "content-digest" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=1705320000;keyid="agent-key-1";alg="ed25519";nonce="n789"' \
+  -H 'signature: sig1=:MEUCIQDx...==:' \
+  -H 'content-digest: sha-256=:47DEQpj8HBSa+/TImW+5JCeuQeRkm5NMpJWZG3hSuFU=:' \
+  -H 'sigilum-namespace: my-service-ns' \
+  -H 'sigilum-subject: service@my-service.com' \
+  -H 'sigilum-agent-key: ed25519:LS0tLS...' \
+  -H 'sigilum-agent-cert: eyJ2ZXJzaW9u...' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "namespace": "acme-corp",
+    "public_key": "ed25519:LS0tLS1CRUdJTi...",
+    "service": "my-service",
+    "agent_ip": "203.0.113.45",
+    "nonce": "abc123xyz789",
+    "subject": "user@example.com",
+    "agent_id": "agent-001",
+    "agent_name": "Production Agent"
+  }'
+```
+
+```json 201 Response (Created)
+{
+  "claim_id": "claim_abc123",
+  "status": "pending",
+  "service": "my-service",
+  "message": "Authorization request submitted successfully"
+}
+```
+
+```json 200 Response (Exists)
+{
+  "claim_id": "claim_abc123",
+  "status": "approved",
+  "service": "my-service",
+  "message": "Authorization already approved"
+}
+```
+
+</CodeGroup>
+
+### Error Responses
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 400 | `INVALID_REQUEST` | Invalid request body or parameters |
+| 401 | `SIGNATURE_INVALID` | Invalid signature or API key |
+| 403 | `FORBIDDEN` | Service slug mismatch |
+| 404 | `NOT_FOUND` | Namespace or service not found |
+| 409 | `CONFLICT` | Conflicting claim state |
+| 503 | `SERVICE_UNAVAILABLE` | Database unavailable |
+
+---
+
+## Get Authorization Request
+
+<ParamField path="GET /v1/claims/{claimId}" type="endpoint">
+  Retrieve details for a specific authorization request.
+</ParamField>
+
+Requires namespace-owner authentication (dashboard cookie).
+
+### Path Parameters
+
+<ParamField path="claimId" type="string" required>
+  Claim identifier.
+</ParamField>
+
+### Response
+
+Returns full claim details (see response schema in [Namespaces](/api-reference/namespaces#get-namespace-authorization-requests)).
+
+### Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://api.sigilum.id/v1/claims/claim_abc123' \
+  -H 'Cookie: sigilum_token=eyJhbGciOiJIUzI1NiIs...'
+```
+
+```json Response
+{
+  "claim_id": "claim_abc123",
+  "namespace": "acme-corp",
+  "service": "my-service",
+  "public_key": "ed25519:LS0tLS1CRUdJTi...",
+  "agent_ip": "203.0.113.45",
+  "status": "approved",
+  "created_at": "2024-01-15T10:30:00Z",
+  "approved_at": "2024-01-15T10:35:00Z",
+  "revoked_at": null,
+  "approval_tx_hash": "0x1234...",
+  "revocation_tx_hash": null,
+  "subject": "user@example.com",
+  "agent_id": "agent-001",
+  "agent_name": "Production Agent"
+}
+```
+
+</CodeGroup>
+
+### Error Responses
+
+| Status | Description |
+|--------|-------------|
+| 401 | Not authenticated |
+| 403 | Not authorized for this namespace |
+| 404 | Claim not found |
+
+---
+
+## Approve Authorization Request
+
+<ParamField path="POST /v1/claims/{claimId}/approve" type="endpoint">
+  Approve a pending authorization request.
+</ParamField>
+
+Requires namespace-owner authentication.
+
+### Path Parameters
+
+<ParamField path="claimId" type="string" required>
+  Claim identifier to approve.
+</ParamField>
+
+### Response
+
+<ResponseField name="claim_id" type="string" required>
+  Claim identifier.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Will be `approved`.
+</ResponseField>
+
+<ResponseField name="agents_approved" type="integer" required>
+  Number of approved agents in this namespace.
+</ResponseField>
+
+<ResponseField name="agents_limit" type="integer" required>
+  Maximum number of agents allowed in this namespace.
+</ResponseField>
+
+<ResponseField name="blockchain_tx_status" type="string" required>
+  Blockchain transaction status: `queued` (if blockchain enabled).
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST 'https://api.sigilum.id/v1/claims/claim_abc123/approve' \
+  -H 'Cookie: sigilum_token=eyJhbGciOiJIUzI1NiIs...'
+```
+
+```json Response
+{
+  "claim_id": "claim_abc123",
+  "status": "approved",
+  "agents_approved": 5,
+  "agents_limit": 100,
+  "blockchain_tx_status": "queued"
+}
+```
+
+</CodeGroup>
+
+### Error Responses
+
+| Status | Description |
+|--------|-------------|
+| 401 | Not authenticated |
+| 403 | Not authorized for this namespace |
+| 404 | Claim not found |
+| 409 | Claim already approved or in invalid state |
+
+---
+
+## Reject Authorization Request
+
+<ParamField path="POST /v1/claims/{claimId}/reject" type="endpoint">
+  Reject a pending authorization request.
+</ParamField>
+
+Requires namespace-owner authentication.
+
+### Path Parameters
+
+<ParamField path="claimId" type="string" required>
+  Claim identifier to reject.
+</ParamField>
+
+### Response
+
+<ResponseField name="claim_id" type="string" required>
+  Claim identifier.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Will be `rejected`.
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST 'https://api.sigilum.id/v1/claims/claim_abc123/reject' \
+  -H 'Cookie: sigilum_token=eyJhbGciOiJIUzI1NiIs...'
+```
+
+```json Response
+{
+  "claim_id": "claim_abc123",
+  "status": "rejected"
+}
+```
+
+</CodeGroup>
+
+### Error Responses
+
+| Status | Description |
+|--------|-------------|
+| 401 | Not authenticated |
+| 403 | Not authorized for this namespace |
+| 404 | Claim not found |
+
+---
+
+## Revoke Authorization
+
+<ParamField path="POST /v1/claims/{claimId}/revoke" type="endpoint">
+  Revoke an approved authorization.
+</ParamField>
+
+Requires namespace-owner authentication.
+
+### Path Parameters
+
+<ParamField path="claimId" type="string" required>
+  Claim identifier to revoke.
+</ParamField>
+
+### Response
+
+<ResponseField name="claim_id" type="string" required>
+  Claim identifier.
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Will be `revoked`.
+</ResponseField>
+
+<ResponseField name="blockchain_tx_status" type="string" required>
+  Blockchain transaction status: `queued` (if blockchain enabled).
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST 'https://api.sigilum.id/v1/claims/claim_abc123/revoke' \
+  -H 'Cookie: sigilum_token=eyJhbGciOiJIUzI1NiIs...'
+```
+
+```json Response
+{
+  "claim_id": "claim_abc123",
+  "status": "revoked",
+  "blockchain_tx_status": "queued"
+}
+```
+
+</CodeGroup>
+
+### Error Responses
+
+| Status | Description |
+|--------|-------------|
+| 401 | Not authenticated |
+| 403 | Not authorized for this namespace |
+| 404 | Claim not found |
+| 409 | Claim not in approved state |
+
+## Webhook Events
+
+When configured, services receive webhook notifications for authorization lifecycle events:
+
+- `request.submitted` - New authorization request created
+- `request.approved` - Authorization request approved
+- `request.rejected` - Authorization request rejected
+- `request.revoked` - Authorization revoked
+- `request.expired` - Authorization expired
+
+See [Services documentation](/api-reference/services) for webhook configuration.

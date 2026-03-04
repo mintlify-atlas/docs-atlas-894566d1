@@ -1,0 +1,1041 @@
+---
+title: "Admin Endpoints"
+description: "Manage connections, credentials, and service catalog"
+---
+
+## Overview
+
+Gateway admin endpoints provide local management for:
+
+- **Connections** - CRUD operations for HTTP and MCP connectors
+- **Credential Variables** - Shared secrets reusable across connections
+- **Service Catalog** - Templates for quick connection setup
+- **Testing & Discovery** - Validate connections and discover MCP tools
+
+<Warning>
+Admin endpoints are intended for **trusted local environments**. Configure `GATEWAY_ADMIN_ACCESS_MODE` appropriately for your deployment.
+</Warning>
+
+## Admin Access Modes
+
+Gateway supports three admin access trust models:
+
+### Hybrid Mode (Default)
+
+```bash
+GATEWAY_ADMIN_ACCESS_MODE=hybrid
+GATEWAY_ADMIN_TOKEN=strong_random_token_here
+```
+
+Allows requests from:
+- Loopback addresses (`127.0.0.1`, `::1`), OR
+- Any IP with valid `Authorization: Bearer <GATEWAY_ADMIN_TOKEN>` header
+
+### Loopback Mode
+
+```bash
+GATEWAY_ADMIN_ACCESS_MODE=loopback
+```
+
+Only allows requests from loopback addresses. Rejects all other requests.
+
+### Token Mode
+
+```bash
+GATEWAY_ADMIN_ACCESS_MODE=token
+GATEWAY_ADMIN_TOKEN=strong_random_token_here
+```
+
+Requires valid admin token from all requests regardless of source IP.
+
+<Note>
+`GATEWAY_ADMIN_TOKEN` is required when using `token` or `hybrid` mode.
+</Note>
+
+## Signed Admin Checks
+
+Test and discovery endpoints can require Sigilum-signed requests:
+
+```bash
+GATEWAY_REQUIRE_SIGNED_ADMIN_CHECKS=true  # Default: true
+```
+
+When enabled:
+- `POST /api/admin/connections/{id}/test` requires signature headers + approved claim
+- `POST /api/admin/connections/{id}/discover` requires signature headers + approved claim
+
+Set to `false` only for trusted local maintenance.
+
+---
+
+## Connections
+
+### List Connections
+
+<api method="get" endpoint="/api/admin/connections">
+  List all configured connections
+</api>
+
+#### Response
+
+<ResponseField name="connections" type="array" required>
+  Array of connection objects
+  
+  <Expandable title="Connection Object">
+    <ResponseField name="id" type="string" required>
+      Connection identifier (e.g., `slack-proxy`, `linear-mcp`)
+    </ResponseField>
+    
+    <ResponseField name="name" type="string" required>
+      Human-readable connection name
+    </ResponseField>
+    
+    <ResponseField name="protocol" type="string" required>
+      Protocol type: `http` or `mcp`
+    </ResponseField>
+    
+    <ResponseField name="base_url" type="string" required>
+      Upstream base URL
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      Connection status: `active` or `disabled`
+    </ResponseField>
+    
+    <ResponseField name="auth_mode" type="string" required>
+      Authentication mode: `bearer`, `header_key`, or `query_param`
+    </ResponseField>
+    
+    <ResponseField name="created_at" type="string" required>
+      RFC3339 timestamp of creation
+    </ResponseField>
+    
+    <ResponseField name="updated_at" type="string" required>
+      RFC3339 timestamp of last update
+    </ResponseField>
+    
+    <ResponseField name="last_tested_at" type="string">
+      RFC3339 timestamp of last test execution
+    </ResponseField>
+    
+    <ResponseField name="last_test_status" type="string">
+      Last test result: `success` or `failure`
+    </ResponseField>
+    
+    <ResponseField name="mcp_discovery" type="object">
+      MCP discovery metadata (only for `protocol: "mcp"`)
+      
+      <Expandable title="MCP Discovery">
+        <ResponseField name="server" type="object">
+          MCP server info (name, version, protocol_version)
+        </ResponseField>
+        
+        <ResponseField name="tools" type="array">
+          Discovered MCP tools
+        </ResponseField>
+        
+        <ResponseField name="last_discovered_at" type="string">
+          RFC3339 timestamp of last discovery
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example Request
+
+```bash
+curl -X GET http://localhost:38100/api/admin/connections
+```
+
+#### Example Response
+
+```json
+{
+  "connections": [
+    {
+      "id": "slack-proxy",
+      "name": "Slack",
+      "protocol": "http",
+      "base_url": "https://slack.com/api",
+      "path_prefix": "",
+      "auth_mode": "bearer",
+      "auth_header_name": "Authorization",
+      "auth_prefix": "Bearer ",
+      "status": "active",
+      "created_at": "2026-03-01T10:00:00Z",
+      "updated_at": "2026-03-01T10:00:00Z",
+      "last_tested_at": "2026-03-04T09:00:00Z",
+      "last_test_status": "success",
+      "last_test_http_status": 200,
+      "secret_version": 1
+    },
+    {
+      "id": "linear-mcp",
+      "name": "Linear MCP",
+      "protocol": "mcp",
+      "base_url": "https://mcp.linear.app",
+      "mcp_transport": "streamable_http",
+      "mcp_endpoint": "/mcp",
+      "auth_mode": "bearer",
+      "status": "active",
+      "created_at": "2026-03-02T10:00:00Z",
+      "updated_at": "2026-03-02T10:00:00Z",
+      "mcp_discovery": {
+        "server": {
+          "name": "linear-mcp-server",
+          "version": "1.0.0",
+          "protocol_version": "2024-11-05"
+        },
+        "tools": [
+          {
+            "name": "linear.searchIssues",
+            "description": "Search Linear issues"
+          }
+        ],
+        "last_discovered_at": "2026-03-04T09:30:00Z"
+      },
+      "secret_version": 1
+    }
+  ]
+}
+```
+
+---
+
+### Create Connection
+
+<api method="post" endpoint="/api/admin/connections">
+  Create a new connection
+</api>
+
+#### Request Body
+
+<ParamField body="id" type="string" required>
+  Unique connection identifier (alphanumeric, hyphens, underscores)
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Human-readable connection name
+</ParamField>
+
+<ParamField body="protocol" type="string" default="http">
+  Protocol type: `http` or `mcp`
+</ParamField>
+
+<ParamField body="base_url" type="string" required>
+  Upstream base URL (e.g., `https://slack.com/api`)
+</ParamField>
+
+<ParamField body="path_prefix" type="string">
+  Optional path prefix prepended to all requests
+</ParamField>
+
+<ParamField body="auth_mode" type="string" required>
+  Authentication mode: `bearer`, `header_key`, or `query_param`
+</ParamField>
+
+<ParamField body="auth_header_name" type="string" required>
+  Header name for auth injection (e.g., `Authorization`, `X-API-Key`)
+</ParamField>
+
+<ParamField body="auth_prefix" type="string">
+  Prefix for auth value (e.g., `Bearer ` for OAuth tokens)
+</ParamField>
+
+<ParamField body="auth_secret_key" type="string">
+  Key name in `secrets` object to use for auth (HTTP connections require this)
+</ParamField>
+
+<ParamField body="secrets" type="object" required>
+  Credential key-value pairs (encrypted before storage)
+  
+  Example: `{"bot_token": "xoxb-123", "api_key": "{{SHARED_KEY}}"}`
+</ParamField>
+
+<ParamField body="rotation_interval_days" type="integer">
+  Credential rotation interval in days (for rotation enforcement)
+</ParamField>
+
+<ParamField body="mcp_transport" type="string">
+  MCP transport protocol (currently only `streamable_http` supported)
+</ParamField>
+
+<ParamField body="mcp_endpoint" type="string">
+  MCP endpoint path or full URL (for `protocol: "mcp"`)
+</ParamField>
+
+<ParamField body="mcp_tool_allowlist" type="array<string>">
+  Connection-level tool allowlist (only these tools exposed)
+</ParamField>
+
+<ParamField body="mcp_tool_denylist" type="array<string>">
+  Connection-level tool denylist (these tools blocked)
+</ParamField>
+
+<ParamField body="mcp_max_tools_exposed" type="integer">
+  Maximum tools to expose (truncate additional tools)
+</ParamField>
+
+<ParamField body="mcp_subject_tool_policies" type="object">
+  Per-subject tool policies keyed by `sigilum-subject` value
+  
+  Example:
+  ```json
+  {
+    "user_alice": {
+      "allowlist": ["linear.searchIssues"],
+      "denylist": ["linear.deleteIssue"]
+    }
+  }
+  ```
+</ParamField>
+
+#### Example: HTTP Connection
+
+```bash
+curl -X POST http://localhost:38100/api/admin/connections \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "slack-proxy",
+    "name": "Slack",
+    "protocol": "http",
+    "base_url": "https://slack.com/api",
+    "auth_mode": "bearer",
+    "auth_header_name": "Authorization",
+    "auth_prefix": "Bearer ",
+    "auth_secret_key": "bot_token",
+    "secrets": {
+      "bot_token": "xoxb-1234567890-abcdefghij"
+    },
+    "rotation_interval_days": 90
+  }'
+```
+
+#### Example: MCP Connection with Shared Variable
+
+```bash
+curl -X POST http://localhost:38100/api/admin/connections \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id": "linear-mcp",
+    "name": "Linear MCP",
+    "protocol": "mcp",
+    "base_url": "https://mcp.linear.app",
+    "mcp_transport": "streamable_http",
+    "mcp_endpoint": "/mcp",
+    "auth_mode": "bearer",
+    "auth_header_name": "Authorization",
+    "auth_prefix": "Bearer ",
+    "auth_secret_key": "api_key",
+    "secrets": {
+      "api_key": "{{LINEAR_API_KEY}}"
+    },
+    "mcp_tool_allowlist": ["linear.searchIssues", "linear.getIssue"],
+    "mcp_tool_denylist": ["linear.deleteIssue"]
+  }'
+```
+
+<Note>
+Shared variable references use `{{VARIABLE_NAME}}` syntax. Define variables first via `/api/admin/credential-variables`.
+</Note>
+
+#### Response (201 Created)
+
+```json
+{
+  "id": "slack-proxy",
+  "name": "Slack",
+  "protocol": "http",
+  "base_url": "https://slack.com/api",
+  "auth_mode": "bearer",
+  "auth_header_name": "Authorization",
+  "auth_prefix": "Bearer ",
+  "status": "active",
+  "created_at": "2026-03-04T11:00:00Z",
+  "updated_at": "2026-03-04T11:00:00Z",
+  "secret_version": 1
+}
+```
+
+---
+
+### Get Connection
+
+<api method="get" endpoint="/api/admin/connections/{id}">
+  Get a specific connection by ID
+</api>
+
+<ParamField path="id" type="string" required>
+  Connection identifier
+</ParamField>
+
+#### Example Request
+
+```bash
+curl -X GET http://localhost:38100/api/admin/connections/slack-proxy
+```
+
+#### Response
+
+Returns the connection object (same structure as List Connections).
+
+<Note>
+Secrets are never returned in GET responses. Only metadata is included.
+</Note>
+
+---
+
+### Update Connection
+
+<api method="patch" endpoint="/api/admin/connections/{id}">
+  Update connection configuration (non-destructive partial update)
+</api>
+
+<ParamField path="id" type="string" required>
+  Connection identifier
+</ParamField>
+
+#### Request Body
+
+All fields are optional. Only provided fields are updated.
+
+<ParamField body="name" type="string">
+  Update connection name
+</ParamField>
+
+<ParamField body="status" type="string">
+  Update status: `active` or `disabled`
+</ParamField>
+
+<ParamField body="path_prefix" type="string">
+  Update path prefix
+</ParamField>
+
+<ParamField body="auth_mode" type="string">
+  Update auth mode
+</ParamField>
+
+<ParamField body="mcp_tool_allowlist" type="array<string>">
+  Update MCP tool allowlist
+</ParamField>
+
+<ParamField body="mcp_tool_denylist" type="array<string>">
+  Update MCP tool denylist
+</ParamField>
+
+<ParamField body="mcp_subject_tool_policies" type="object">
+  Update per-subject tool policies
+</ParamField>
+
+#### Example: Disable Connection
+
+```bash
+curl -X PATCH http://localhost:38100/api/admin/connections/slack-proxy \
+  -H 'Content-Type: application/json' \
+  -d '{"status": "disabled"}'
+```
+
+#### Example: Update MCP Policies
+
+```bash
+curl -X PATCH http://localhost:38100/api/admin/connections/linear-mcp \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "mcp_tool_allowlist": ["linear.searchIssues", "linear.getIssue", "linear.createIssue"],
+    "mcp_subject_tool_policies": {
+      "admin_bob": {
+        "allowlist": ["linear.*"]
+      },
+      "user_alice": {
+        "denylist": ["linear.createIssue", "linear.deleteIssue"]
+      }
+    }
+  }'
+```
+
+---
+
+### Delete Connection
+
+<api method="delete" endpoint="/api/admin/connections/{id}">
+  Delete a connection and its encrypted secrets
+</api>
+
+<ParamField path="id" type="string" required>
+  Connection identifier
+</ParamField>
+
+#### Example Request
+
+```bash
+curl -X DELETE http://localhost:38100/api/admin/connections/slack-proxy
+```
+
+#### Response (204 No Content)
+
+Empty response on success.
+
+<Warning>
+Deletion is permanent and cannot be undone. Secrets are wiped from encrypted storage.
+</Warning>
+
+---
+
+### Rotate Connection Secret
+
+<api method="post" endpoint="/api/admin/connections/{id}/rotate">
+  Rotate connection credentials
+</api>
+
+<ParamField path="id" type="string" required>
+  Connection identifier
+</ParamField>
+
+#### Request Body
+
+<ParamField body="secrets" type="object" required>
+  New credential key-value pairs
+</ParamField>
+
+<ParamField body="rotated_by" type="string">
+  Subject who performed rotation (for audit trail)
+</ParamField>
+
+<ParamField body="rotation_reason" type="string">
+  Reason for rotation (e.g., `scheduled`, `compromised`, `manual`)
+</ParamField>
+
+#### Example Request
+
+```bash
+curl -X POST http://localhost:38100/api/admin/connections/slack-proxy/rotate \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "secrets": {
+      "bot_token": "xoxb-new-token-xyz789"
+    },
+    "rotated_by": "admin_bob",
+    "rotation_reason": "scheduled"
+  }'
+```
+
+#### Response
+
+```json
+{
+  "id": "slack-proxy",
+  "last_rotated_at": "2026-03-04T11:30:00Z",
+  "next_rotation_due_at": "2026-06-02T11:30:00Z",
+  "secret_version": 2
+}
+```
+
+<Note>
+Rotation updates `last_rotated_at`, increments `secret_version`, and recalculates `next_rotation_due_at` based on `rotation_interval_days`.
+</Note>
+
+---
+
+### Test Connection
+
+<api method="post" endpoint="/api/admin/connections/{id}/test">
+  Test connection with a probe request to upstream
+</api>
+
+<ParamField path="id" type="string" required>
+  Connection identifier
+</ParamField>
+
+#### Request Body
+
+<ParamField body="method" type="string" default="GET">
+  HTTP method for test request
+</ParamField>
+
+<ParamField body="test_path" type="string" required>
+  Upstream path to test (e.g., `/auth.test` for Slack)
+</ParamField>
+
+<ParamField body="headers" type="object">
+  Additional headers for test request
+</ParamField>
+
+<ParamField body="body" type="string">
+  Request body for POST/PUT tests
+</ParamField>
+
+<Note>
+When `GATEWAY_REQUIRE_SIGNED_ADMIN_CHECKS=true`, this endpoint requires Sigilum signature headers and approved claim.
+</Note>
+
+#### Example Request
+
+```bash
+curl -X POST http://localhost:38100/api/admin/connections/slack-proxy/test \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "method": "GET",
+    "test_path": "/auth.test"
+  }'
+```
+
+#### Response (Success)
+
+```json
+{
+  "status": "success",
+  "http_status": 200
+}
+```
+
+#### Response (Failure)
+
+```json
+{
+  "status": "failure",
+  "http_status": 401,
+  "error": "invalid_auth"
+}
+```
+
+---
+
+### Discover MCP Tools
+
+<api method="post" endpoint="/api/admin/connections/{id}/discover">
+  Run MCP discovery and cache tools metadata
+</api>
+
+<ParamField path="id" type="string" required>
+  MCP connection identifier (must have `protocol: "mcp"`)
+</ParamField>
+
+<ParamField query="refresh" type="string" default="force">
+  Refresh mode:
+  - `force` - Bypass cache and refresh from upstream (default for admin discovery)
+  - `auto` - Use cache policy (TTL + stale-if-error)
+</ParamField>
+
+<Note>
+When `GATEWAY_REQUIRE_SIGNED_ADMIN_CHECKS=true`, this endpoint requires Sigilum signature headers and approved claim.
+</Note>
+
+#### Example Request
+
+```bash
+curl -X POST 'http://localhost:38100/api/admin/connections/linear-mcp/discover?refresh=force'
+```
+
+#### Response
+
+```json
+{
+  "server": {
+    "name": "linear-mcp-server",
+    "version": "1.0.0",
+    "protocol_version": "2024-11-05"
+  },
+  "tools": [
+    {
+      "name": "linear.searchIssues",
+      "description": "Search Linear issues by text query",
+      "input_schema": "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\"}},\"required\":[\"query\"]}"
+    },
+    {
+      "name": "linear.getIssue",
+      "description": "Get a specific Linear issue by ID",
+      "input_schema": "{\"type\":\"object\",\"properties\":{\"id\":{\"type\":\"string\"}},\"required\":[\"id\"]}"
+    },
+    {
+      "name": "linear.createIssue",
+      "description": "Create a new Linear issue",
+      "input_schema": "{\"type\":\"object\",\"properties\":{\"title\":{\"type\":\"string\"},\"description\":{\"type\":\"string\"}},\"required\":[\"title\"]}"
+    }
+  ],
+  "last_discovered_at": "2026-03-04T12:00:00Z"
+}
+```
+
+<Tip>
+Run discovery after creating a new MCP connection to populate available tools. Update allowlist/denylist based on discovered tools.
+</Tip>
+
+---
+
+## Credential Variables
+
+Shared credential variables allow reusing secrets across multiple connections.
+
+### List Credential Variables
+
+<api method="get" endpoint="/api/admin/credential-variables">
+  List all shared credential variables (metadata only, no values)
+</api>
+
+#### Response
+
+<ResponseField name="variables" type="array" required>
+  Array of credential variable metadata
+  
+  <Expandable title="Variable Object">
+    <ResponseField name="key" type="string" required>
+      Variable key (e.g., `OPENAI_API_KEY`)
+    </ResponseField>
+    
+    <ResponseField name="created_at" type="string" required>
+      RFC3339 timestamp of creation
+    </ResponseField>
+    
+    <ResponseField name="updated_at" type="string" required>
+      RFC3339 timestamp of last update
+    </ResponseField>
+    
+    <ResponseField name="created_by_subject" type="string">
+      Subject who created the variable (for audit trail)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example Response
+
+```json
+{
+  "variables": [
+    {
+      "key": "OPENAI_API_KEY",
+      "created_at": "2026-03-01T10:00:00Z",
+      "updated_at": "2026-03-01T10:00:00Z",
+      "created_by_subject": "admin_bob"
+    },
+    {
+      "key": "LINEAR_API_KEY",
+      "created_at": "2026-03-02T10:00:00Z",
+      "updated_at": "2026-03-02T10:00:00Z",
+      "created_by_subject": "user_alice"
+    }
+  ]
+}
+```
+
+---
+
+### Create/Update Credential Variable
+
+<api method="post" endpoint="/api/admin/credential-variables">
+  Upsert a shared credential variable
+</api>
+
+#### Request Body
+
+<ParamField body="key" type="string" required>
+  Variable key (uppercase recommended, e.g., `OPENAI_API_KEY`)
+</ParamField>
+
+<ParamField body="value" type="string" required>
+  Secret value (encrypted before storage)
+</ParamField>
+
+<ParamField body="created_by_subject" type="string">
+  Subject creating the variable (for audit trail)
+</ParamField>
+
+<Note>
+If `sigilum-subject` header is present, it takes precedence over `created_by_subject` in request body.
+</Note>
+
+#### Example Request
+
+```bash
+curl -X POST http://localhost:38100/api/admin/credential-variables \
+  -H 'Content-Type: application/json' \
+  -H 'sigilum-subject: admin_bob' \
+  -d '{
+    "key": "OPENAI_API_KEY",
+    "value": "sk-proj-abc123xyz789def456ghi012jkl345mno678pqr901stu234vwx"
+  }'
+```
+
+#### Response (201 Created)
+
+```json
+{
+  "key": "OPENAI_API_KEY",
+  "created_at": "2026-03-04T12:15:00Z",
+  "updated_at": "2026-03-04T12:15:00Z",
+  "created_by_subject": "admin_bob"
+}
+```
+
+---
+
+### Delete Credential Variable
+
+<api method="delete" endpoint="/api/admin/credential-variables/{key}">
+  Delete a shared credential variable
+</api>
+
+<ParamField path="key" type="string" required>
+  Variable key to delete
+</ParamField>
+
+#### Example Request
+
+```bash
+curl -X DELETE http://localhost:38100/api/admin/credential-variables/OPENAI_API_KEY
+```
+
+#### Response (204 No Content)
+
+Empty response on success.
+
+<Warning>
+Deletion is permanent. Connections referencing `{{OPENAI_API_KEY}}` will fail until variable is recreated.
+</Warning>
+
+---
+
+## Service Catalog
+
+Service catalog provides templates for quick connection setup.
+
+### Get Service Catalog
+
+<api method="get" endpoint="/api/admin/service-catalog">
+  Retrieve service catalog templates
+</api>
+
+#### Response
+
+<ResponseField name="version" type="string" required>
+  Catalog schema version
+</ResponseField>
+
+<ResponseField name="services" type="array" required>
+  Array of service templates
+  
+  <Expandable title="Service Template">
+    <ResponseField name="key" type="string" required>
+      Template identifier (e.g., `slack`, `linear-mcp`)
+    </ResponseField>
+    
+    <ResponseField name="label" type="string" required>
+      Human-readable service name
+    </ResponseField>
+    
+    <ResponseField name="description" type="string">
+      Service description
+    </ResponseField>
+    
+    <ResponseField name="connection_id" type="string" required>
+      Suggested connection ID
+    </ResponseField>
+    
+    <ResponseField name="protocol" type="string">
+      Protocol: `http` or `mcp`
+    </ResponseField>
+    
+    <ResponseField name="base_url" type="string" required>
+      Upstream base URL
+    </ResponseField>
+    
+    <ResponseField name="credential_fields" type="array" required>
+      Required credential fields for setup
+      
+      <Expandable title="Credential Field">
+        <ResponseField name="key" type="string" required>
+          Field key
+        </ResponseField>
+        
+        <ResponseField name="label" type="string" required>
+          Display label
+        </ResponseField>
+        
+        <ResponseField name="env_var" type="string">
+          Suggested shared variable name (e.g., `SLACK_BOT_TOKEN`)
+        </ResponseField>
+        
+        <ResponseField name="secret" type="boolean" required>
+          Whether field contains secret data
+        </ResponseField>
+        
+        <ResponseField name="required" type="boolean" required>
+          Whether field is required
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+#### Example Response
+
+```json
+{
+  "version": "1.0",
+  "services": [
+    {
+      "key": "slack",
+      "label": "Slack",
+      "description": "Slack workspace integration",
+      "connection_id": "slack-proxy",
+      "protocol": "http",
+      "base_url": "https://slack.com/api",
+      "auth_mode": "bearer",
+      "auth_header_name": "Authorization",
+      "auth_prefix": "Bearer ",
+      "auth_secret_key": "bot_token",
+      "default_test_path": "/auth.test",
+      "default_test_method": "GET",
+      "credential_fields": [
+        {
+          "key": "bot_token",
+          "label": "Bot Token",
+          "placeholder": "xoxb-...",
+          "env_var": "SLACK_BOT_TOKEN",
+          "secret": true,
+          "required": true,
+          "help": "OAuth bot token from Slack app settings"
+        }
+      ]
+    },
+    {
+      "key": "linear-mcp",
+      "label": "Linear (MCP)",
+      "description": "Linear project management via MCP",
+      "connection_id": "linear-mcp",
+      "protocol": "mcp",
+      "base_url": "https://mcp.linear.app",
+      "mcp_transport": "streamable_http",
+      "mcp_endpoint": "/mcp",
+      "auth_mode": "bearer",
+      "auth_header_name": "Authorization",
+      "auth_prefix": "Bearer ",
+      "auth_secret_key": "api_key",
+      "credential_fields": [
+        {
+          "key": "api_key",
+          "label": "Linear API Key",
+          "placeholder": "lin_api_...",
+          "env_var": "LINEAR_API_KEY",
+          "secret": true,
+          "required": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+<Note>
+The `env_var` field is a dashboard hint for shared variable detection. Gateway does not automatically read from host environment variables.
+</Note>
+
+---
+
+### Update Service Catalog
+
+<api method="put" endpoint="/api/admin/service-catalog">
+  Replace entire service catalog (use with caution)
+</api>
+
+#### Request Body
+
+Full catalog JSON (same structure as GET response).
+
+<Warning>
+This endpoint replaces the entire catalog. Use only for bulk catalog management.
+</Warning>
+
+---
+
+## CLI Reference
+
+Gateway includes a local CLI for direct connection management:
+
+### List Connections
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli list
+```
+
+### Add HTTP Connection
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli add \
+  --name Slack \
+  --base-url https://slack.com/api \
+  --auth-mode bearer \
+  --auth-prefix "Bearer " \
+  --auth-secret-key bot_token \
+  --secret bot_token=xoxb-1234567890-abcdefghij
+```
+
+### Add MCP Connection
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli add \
+  --name LinearMCP \
+  --protocol mcp \
+  --base-url https://mcp.linear.app \
+  --mcp-endpoint /mcp \
+  --auth-secret-key api_key \
+  --secret api_key=lin_api_xyz789 \
+  --mcp-allow linear.searchIssues \
+  --mcp-deny linear.deleteIssue
+```
+
+### Test Connection
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli test \
+  --id slack-proxy \
+  --method GET \
+  --path /auth.test
+```
+
+### Rotate Credentials
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli rotate \
+  --id slack-proxy \
+  --secret bot_token=xoxb-new-token-xyz789
+```
+
+### Delete Connection
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli delete --id slack-proxy
+```
+
+<Note>
+CLI reads `GATEWAY_DATA_DIR` and `GATEWAY_MASTER_KEY` from environment or accepts `--master-key` flag.
+</Note>
+
+---
+
+## Configuration Variables
+
+Key environment variables for admin operations:
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GATEWAY_ADMIN_ACCESS_MODE` | `hybrid` | Admin access model: `hybrid`, `loopback`, or `token` |
+| `GATEWAY_ADMIN_TOKEN` | - | Admin token (required for `token`/`hybrid` modes) |
+| `GATEWAY_REQUIRE_SIGNED_ADMIN_CHECKS` | `true` | Require signatures for test/discover endpoints |
+| `GATEWAY_ALLOWED_ORIGINS` | - | CORS allowed origins (comma-separated) |
+| `GATEWAY_DATA_DIR` | `~/.local/share/sigilum-gateway` | Local data directory |
+| `GATEWAY_SERVICE_CATALOG_FILE` | `$DATA_DIR/service-catalog.json` | Service catalog path |
+| `GATEWAY_MASTER_KEY` | - | Encryption key for secrets (base64-encoded) |
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Proxy Endpoints" icon="arrow-right" href="/api-reference/gateway/proxy">
+    Use configured connections for runtime requests
+  </Card>
+  <Card title="MCP Runtime" icon="arrow-right" href="/api-reference/gateway/mcp">
+    Execute MCP tools after discovery
+  </Card>
+</CardGroup>

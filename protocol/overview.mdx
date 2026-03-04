@@ -1,0 +1,185 @@
+---
+title: Protocol Overview
+description: Sigilum protocol for AI agent identity and authentication
+---
+
+## What is the Sigilum Protocol?
+
+The Sigilum protocol provides a local-first, cryptographically verifiable identity and authentication system for AI agents. It enables both agent-side request signing and service-side verification without requiring hosted dependencies at runtime.
+
+## Core Components
+
+The protocol consists of three main elements:
+
+### 1. DID Method (`did:sigilum`)
+
+A decentralized identifier method that binds:
+- A namespace owner (human or organization)
+- One or more approved Ed25519 agent public keys
+- One or more service authorizations
+
+Basic syntax:
+```text
+did:sigilum:<namespace>
+```
+
+With fragment for identity hierarchy:
+```text
+did:sigilum:{namespace}:{service}#{agent}#{subject}
+```
+
+**Example:**
+```text
+did:sigilum:mfs:narmi#davis-agent#customer-12345
+```
+
+This represents:
+- **Namespace**: `mfs` (the owning entity)
+- **Service**: `narmi` (the authorized service)
+- **Agent**: `davis-agent` (the specific agent instance)
+- **Subject**: `customer-12345` (the authenticated principal)
+
+### 2. RFC 9421 Signing Profile
+
+HTTP message signatures based on RFC 9421 with a Sigilum-specific profile:
+
+- **Algorithm**: Ed25519 signatures only
+- **Signature headers**: `Signature-Input` and `Signature`
+- **Required signed components**:
+  - `@method` - HTTP method (lowercase)
+  - `@target-uri` - Full request URI (fragments stripped)
+  - `sigilum-namespace` - Owner namespace
+  - `sigilum-subject` - Requester principal
+  - `sigilum-agent-key` - Agent public key
+  - `sigilum-agent-cert` - Agent certificate
+  - `content-digest` - SHA-256 body hash (when body present)
+
+### 3. Local Identity Management
+
+Identities are created and managed locally:
+
+**Storage location:**
+```text
+~/.sigilum/identities/<namespace>/identity.json
+```
+
+**Identity record structure:**
+```json
+{
+  "version": 1,
+  "namespace": "fixture-alice",
+  "did": "did:sigilum:fixture-alice",
+  "keyId": "did:sigilum:fixture-alice#ed25519-99fb00dc16ee555a",
+  "publicKey": "ed25519:J07dj/co4diCmQYTTQGq4adhnMKYejHazCYUQ7eBh0k=",
+  "privateKey": "ZMLKzZSCxP8QXOO1vlmejAvdFaesd3QC6JC9iCt8FfA=",
+  "certificate": { },
+  "createdAt": "2026-02-20T18:04:26Z",
+  "updatedAt": "2026-02-20T18:04:26Z"
+}
+```
+
+## Identity Hierarchy
+
+The protocol uses a four-level identity model for audit and authorization:
+
+```text
+namespace → service → agent → subject
+```
+
+- **Namespace**: The owning entity (human or organization)
+- **Service**: The authorized service or platform
+- **Agent**: The specific agent instance
+- **Subject**: The authenticated principal who triggered the action
+
+### Subject Identity
+
+The `sigilum-subject` header is not decorative—it's a stable requester principal identifier within a namespace. Services can apply subject-aware policies, such as MCP tool filtering.
+
+**Default behavior**: When `subject` is omitted at signing time, SDKs default `sigilum-subject` to the signer namespace.
+
+**Responsibility**: Platforms and integrations must set this value accurately to reflect "who triggered this action" (the authenticated human or system identity).
+
+## Security Model
+
+The protocol provides multiple layers of security:
+
+### Cryptographic Authentication
+- Ed25519 signatures provide 128-bit security strength
+- All requests include signed proof of namespace ownership
+- Certificate binding prevents key substitution attacks
+
+### Replay Protection
+- Nonce values prevent replay attacks (fixed in test vectors, rotated in production)
+- Timestamp verification ensures freshness
+- Content-digest ensures body integrity
+
+### Local-First Security
+- Identity creation and signing are local operations
+- No hosted dependency required at agent runtime
+- Private keys never leave the local machine
+- Verification is deterministic and offline-capable
+
+### Namespace Authorization
+- Namespace ownership controls approval and revocation rights
+- Service-level authorization layered on top of signature verification
+- Subject-level policy enforcement for fine-grained access control
+
+## API Enforcement
+
+The Sigilum API enforces signed headers on all protected endpoints:
+
+- **Protected paths**: `/v1/*` and `/.well-known/*`
+- **Unsigned requests**: Rejected with authentication error
+- **Signed headers**: Provide identity and authenticity proof
+- **Endpoint-specific auth**: Some endpoints require additional authorization (e.g., service API key bearer auth on `POST /v1/claims`)
+
+## SDK Conformance
+
+All supported SDKs (TypeScript, Python, Go) implement the same signing profile:
+
+- RFC 9421-style `Signature-Input` and `Signature`
+- Ed25519 signatures
+- Required Sigilum headers
+- Optional body integrity via `content-digest`
+- Stable machine-readable output for identity commands
+- Portable retry helpers for idempotent calls
+- Shared conformance test vectors
+
+## Protocol Operations
+
+The protocol supports standard DID lifecycle operations:
+
+### Create
+- Register namespace: `registerNamespace(name)`
+- Authorize agent keys: `approveClaim(claimId)` or `approveClaimDirect(...)`
+
+### Read (Resolve)
+- DID document: `GET /.well-known/did/{did}`
+- DID resolution envelope: `GET /1.0/identifiers/{did}`
+
+### Update
+- Transfer control: `transferNamespace(name, newOwner)`
+- Add/replace authorization: `approveClaim(...)` or `approveClaimDirect(...)`
+- Remove authorization: `revokeClaim(claimId)` or `revokeClaimDirect(...)`
+
+### Deactivate
+- Remove namespace-owner control-plane record
+- Revoke all active approvals
+- Resolver marks DID as deactivated
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="DID Method" icon="fingerprint" href="/protocol/did-method">
+    Learn about the `did:sigilum` method specification
+  </Card>
+  <Card title="Signing Profile" icon="signature" href="/protocol/signing-profile">
+    Understand the RFC 9421 signing profile
+  </Card>
+  <Card title="Security" icon="shield" href="/protocol/security">
+    Explore security considerations and best practices
+  </Card>
+  <Card title="TypeScript SDK" icon="code" href="/sdks/typescript">
+    Get started with the TypeScript SDK
+  </Card>
+</CardGroup>

@@ -1,0 +1,876 @@
+---
+title: Provider Connectors
+description: Configure HTTP and MCP provider connections through Sigilum gateway
+icon: plug
+---
+
+# Provider Connectors
+
+Sigilum gateway acts as a local reverse proxy that enforces signed authentication and claim-based authorization before forwarding requests to third-party APIs. Connectors inject provider credentials and support both traditional HTTP APIs and MCP (Model Context Protocol) tools.
+
+## Protocol Support
+
+The gateway supports two protocol types:
+
+### HTTP Connectors
+
+Traditional REST/GraphQL APIs accessed via reverse proxy.
+
+**Request path:** `/proxy/{connection_id}/...`
+
+**Use cases:**
+- REST APIs (Slack, GitHub, Linear)
+- GraphQL endpoints
+- Any HTTP-based service
+
+**Example:**
+```bash
+GET /proxy/sigilum-secure-slack/api/users.list
+```
+
+### MCP Connectors
+
+Model Context Protocol servers with structured tool discovery and filtering.
+
+**Runtime paths:**
+- `GET /mcp/{connection_id}/tools` - List available tools
+- `GET /mcp/{connection_id}/tools/{tool}/explain` - Get tool schema
+- `POST /mcp/{connection_id}/tools/{tool}/call` - Execute tool
+
+**Features:**
+- Automatic tool discovery with caching
+- Subject-level tool policies (allow/deny by user)
+- Connection-level tool filtering
+- Structured JSON-RPC transport
+
+**Example:**
+```bash
+GET /mcp/sigilum-secure-linear/tools
+POST /mcp/sigilum-secure-linear/tools/searchIssues/call
+```
+
+## Connection Configuration
+
+### HTTP Connection
+
+Basic HTTP provider with Bearer token authentication:
+
+```json
+{
+  "id": "sigilum-secure-slack",
+  "name": "Slack",
+  "protocol": "http",
+  "base_url": "https://slack.com/api",
+  "auth_mode": "bearer",
+  "auth_header_name": "Authorization",
+  "auth_header_prefix": "Bearer ",
+  "auth_secret_key": "bot_token",
+  "secrets": {
+    "bot_token": "xoxb-your-token-here"
+  },
+  "status": "active"
+}
+```
+
+### MCP Connection
+
+MCP provider with tool filtering:
+
+```json
+{
+  "id": "sigilum-secure-linear",
+  "name": "Linear",
+  "protocol": "mcp",
+  "mcp_base_url": "https://mcp.linear.app",
+  "mcp_transport": "streamableHttp",
+  "mcp_endpoint": "/mcp",
+  "auth_mode": "bearer",
+  "auth_secret_key": "api_key",
+  "secrets": {
+    "api_key": "{{LINEAR_API_KEY}}"
+  },
+  "mcp_tool_allowlist": [
+    "linear.searchIssues",
+    "linear.getIssue",
+    "linear.createIssue"
+  ],
+  "mcp_subject_tool_policies": [
+    {
+      "subject": "contractor@example.com",
+      "deny_tools": ["linear.createIssue"]
+    }
+  ],
+  "status": "active"
+}
+```
+
+### Connection Fields
+
+**Core fields:**
+- `id` (string) - Unique connection identifier
+- `name` (string) - Human-readable name
+- `protocol` (string) - `http` or `mcp`
+- `status` (string) - `active`, `inactive`, or `rotation_required`
+
+**HTTP fields:**
+- `base_url` (string) - Upstream API base URL
+- `auth_mode` (string) - `bearer`, `header`, `query_param`, or `none`
+- `auth_header_name` (string) - Header name for credentials (e.g., `Authorization`)
+- `auth_header_prefix` (string) - Prefix for auth header value (e.g., `Bearer `)
+- `auth_secret_key` (string) - Key in secrets map to use
+
+**MCP fields:**
+- `mcp_base_url` (string) - MCP server base URL
+- `mcp_transport` (string) - Transport type (e.g., `streamableHttp`)
+- `mcp_endpoint` (string) - MCP endpoint path (e.g., `/mcp`)
+- `mcp_tool_allowlist` ([]string) - Explicitly allowed tools (empty = allow all)
+- `mcp_tool_denylist` ([]string) - Explicitly denied tools
+- `mcp_max_tools_exposed` (int) - Maximum tools to expose (0 = unlimited)
+- `mcp_subject_tool_policies` ([]object) - Per-subject tool access rules
+
+**Secrets:**
+- `secrets` (map[string]string) - Credential key-value pairs
+
+## Shared Credential Variables
+
+Define credentials once and reference them across multiple connections.
+
+### Creating Shared Variables
+
+**Via HTTP API:**
+
+```bash
+curl -X POST http://127.0.0.1:38100/api/admin/credential-variables \
+  -H 'Content-Type: application/json' \
+  -H 'sigilum-subject: user@example.com' \
+  -d '{
+    "key": "OPENAI_API_KEY",
+    "value": "sk-proj-..."
+  }'
+```
+
+**Via CLI:**
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli \
+  add-variable --key OPENAI_API_KEY --value sk-proj-...
+```
+
+### Referencing Variables
+
+Use `{{VARIABLE_NAME}}` syntax in connection secrets:
+
+```json
+{
+  "secrets": {
+    "api_key": "{{OPENAI_API_KEY}}"
+  }
+}
+```
+
+**Benefits:**
+- Define credential once, use in multiple connections
+- Rotate credential in one place
+- Audit trail via `created_by_subject` tracking
+
+### Variable Metadata
+
+Variables store attribution for audit purposes:
+
+```json
+{
+  "key": "OPENAI_API_KEY",
+  "created_by_subject": "admin@example.com",
+  "created_at": "2024-01-15T10:30:00Z"
+}
+```
+
+## Authentication Modes
+
+### Bearer Token
+
+Standard `Authorization: Bearer <token>` header:
+
+```json
+{
+  "auth_mode": "bearer",
+  "auth_header_name": "Authorization",
+  "auth_header_prefix": "Bearer ",
+  "auth_secret_key": "api_token",
+  "secrets": {
+    "api_token": "sk-..."
+  }
+}
+```
+
+### Custom Header
+
+Custom header name and value:
+
+```json
+{
+  "auth_mode": "header",
+  "auth_header_name": "X-API-Key",
+  "auth_secret_key": "api_key",
+  "secrets": {
+    "api_key": "key-..."
+  }
+}
+```
+
+### Query Parameter
+
+Credential in URL query string:
+
+```json
+{
+  "auth_mode": "query_param",
+  "auth_header_name": "api_key",
+  "auth_secret_key": "token",
+  "secrets": {
+    "token": "abc123"
+  }
+}
+```
+
+**Note:** For MCP connections with query-based auth, encode credential in `mcp_endpoint`:
+
+```json
+{
+  "mcp_endpoint": "https://mcp.example.com/mcp?key={{API_KEY}}"
+}
+```
+
+### No Authentication
+
+Public APIs with no authentication:
+
+```json
+{
+  "auth_mode": "none"
+}
+```
+
+## MCP Discovery
+
+Discover available tools from an MCP server:
+
+### Via HTTP API
+
+```bash
+curl -X POST http://127.0.0.1:38100/api/admin/connections/sigilum-secure-linear/discover?refresh=force
+```
+
+**Refresh modes:**
+- `force` (default) - Bypass cache, always fetch fresh
+- `auto` - Use cached discovery if within TTL
+
+### Via CLI
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli \
+  discover --id sigilum-secure-linear
+```
+
+### Discovery Cache
+
+Discovery results are cached with configurable TTL:
+
+**Environment variables:**
+- `GATEWAY_MCP_DISCOVERY_CACHE_TTL_SECONDS` (default: `300`) - Cache freshness window
+- `GATEWAY_MCP_DISCOVERY_STALE_IF_ERROR_SECONDS` (default: `3600`) - Fallback to stale cache if refresh fails
+
+**Cache behavior:**
+- Fresh: Within TTL → Use cache
+- Stale but valid: Past TTL, refresh failed → Use stale cache
+- Expired: Past stale window → Return error
+
+## Subject-Level Tool Policies
+
+Control which tools specific subjects can access.
+
+### Policy Structure
+
+```json
+{
+  "mcp_subject_tool_policies": [
+    {
+      "subject": "contractor@example.com",
+      "deny_tools": [
+        "linear.deleteIssue",
+        "linear.updateProject"
+      ]
+    },
+    {
+      "subject": "intern@example.com",
+      "allow_tools": [
+        "linear.searchIssues",
+        "linear.getIssue"
+      ]
+    }
+  ]
+}
+```
+
+### Policy Evaluation
+
+**Order of precedence:**
+1. Connection-level `mcp_tool_denylist` (applies to all subjects)
+2. Subject-level `deny_tools` (specific to subject)
+3. Subject-level `allow_tools` (allowlist mode for subject)
+4. Connection-level `mcp_tool_allowlist` (applies to all subjects)
+
+**Logic:**
+- If tool in connection denylist → **Deny**
+- If subject has policy with `deny_tools` and tool in list → **Deny**
+- If subject has policy with `allow_tools` and tool **not** in list → **Deny**
+- If connection has allowlist and tool **not** in list → **Deny**
+- Otherwise → **Allow**
+
+### Use Cases
+
+**Read-only access for contractors:**
+```json
+{
+  "subject": "contractor@example.com",
+  "deny_tools": [
+    "linear.createIssue",
+    "linear.updateIssue",
+    "linear.deleteIssue"
+  ]
+}
+```
+
+**Limited toolset for interns:**
+```json
+{
+  "subject": "intern@example.com",
+  "allow_tools": [
+    "linear.searchIssues",
+    "linear.getIssue",
+    "linear.getProject"
+  ]
+}
+```
+
+## Provider Examples
+
+### OpenAI
+
+```json
+{
+  "id": "sigilum-secure-openai",
+  "name": "OpenAI",
+  "protocol": "http",
+  "base_url": "https://api.openai.com",
+  "auth_mode": "bearer",
+  "auth_header_name": "Authorization",
+  "auth_header_prefix": "Bearer ",
+  "auth_secret_key": "api_key",
+  "secrets": {
+    "api_key": "{{OPENAI_API_KEY}}"
+  },
+  "status": "active"
+}
+```
+
+### Slack
+
+```json
+{
+  "id": "sigilum-secure-slack",
+  "name": "Slack",
+  "protocol": "http",
+  "base_url": "https://slack.com/api",
+  "auth_mode": "bearer",
+  "auth_header_name": "Authorization",
+  "auth_header_prefix": "Bearer ",
+  "auth_secret_key": "bot_token",
+  "secrets": {
+    "bot_token": "xoxb-..."
+  },
+  "status": "active"
+}
+```
+
+### Linear (MCP)
+
+```json
+{
+  "id": "sigilum-secure-linear",
+  "name": "Linear",
+  "protocol": "mcp",
+  "mcp_base_url": "https://mcp.linear.app",
+  "mcp_transport": "streamableHttp",
+  "mcp_endpoint": "/mcp",
+  "auth_mode": "bearer",
+  "auth_secret_key": "api_key",
+  "secrets": {
+    "api_key": "{{LINEAR_API_KEY}}"
+  },
+  "mcp_tool_allowlist": [
+    "linear.searchIssues",
+    "linear.getIssue",
+    "linear.createIssue",
+    "linear.updateIssue"
+  ],
+  "status": "active"
+}
+```
+
+### Typefully (MCP with Query Auth)
+
+```json
+{
+  "id": "sigilum-secure-typefully",
+  "name": "Typefully",
+  "protocol": "mcp",
+  "mcp_base_url": "https://mcp.typefully.com",
+  "mcp_transport": "streamableHttp",
+  "mcp_endpoint": "https://mcp.typefully.com/mcp?TYPEFULLY_API_KEY={{__API_KEY__}}",
+  "auth_mode": "query_param",
+  "auth_header_name": "TYPEFULLY_API_KEY",
+  "auth_secret_key": "__API_KEY__",
+  "secrets": {
+    "__API_KEY__": "{{TYPEFULLY_API_KEY}}"
+  },
+  "status": "active"
+}
+```
+
+## CLI Management
+
+Manage connections via the gateway CLI:
+
+### List Connections
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli list
+```
+
+### Add HTTP Connection
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli add \
+  --name Slack \
+  --base-url https://slack.com/api \
+  --auth-mode bearer \
+  --auth-prefix "Bearer " \
+  --auth-secret-key bot_token \
+  --secret bot_token=xoxb-...
+```
+
+### Add MCP Connection
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli add \
+  --name LinearMCP \
+  --protocol mcp \
+  --base-url https://mcp.linear.app \
+  --mcp-endpoint /mcp \
+  --auth-secret-key api_key \
+  --secret api_key=lin_api_... \
+  --mcp-allow linear.searchIssues \
+  --mcp-allow linear.getIssue \
+  --mcp-deny linear.deleteIssue
+```
+
+### Update Connection
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli update \
+  --id sigilum-secure-slack \
+  --status active
+```
+
+### Rotate Credentials
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli rotate \
+  --id sigilum-secure-slack \
+  --secret bot_token=xoxb-new-token
+```
+
+### Test Connection
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli test \
+  --id sigilum-secure-slack \
+  --method GET \
+  --path /auth.test
+```
+
+### Delete Connection
+
+```bash
+go run ./apps/gateway/service/cmd/sigilum-gateway-cli delete \
+  --id sigilum-secure-slack
+```
+
+## Service Catalog
+
+The gateway uses a service catalog to template common provider configurations.
+
+### Catalog Structure
+
+```json
+{
+  "services": [
+    {
+      "id": "slack",
+      "name": "Slack",
+      "protocol": "http",
+      "base_url": "https://slack.com/api",
+      "auth_mode": "bearer",
+      "credential_fields": [
+        {
+          "key": "bot_token",
+          "label": "Bot Token",
+          "description": "Slack bot user OAuth token (xoxb-...)",
+          "env_var": "SLACK_BOT_TOKEN",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    },
+    {
+      "id": "linear",
+      "name": "Linear",
+      "protocol": "mcp",
+      "mcp_base_url": "https://mcp.linear.app",
+      "mcp_endpoint": "/mcp",
+      "mcp_transport": "streamableHttp",
+      "credential_fields": [
+        {
+          "key": "api_key",
+          "label": "API Key",
+          "description": "Linear personal API key",
+          "env_var": "LINEAR_API_KEY",
+          "required": true,
+          "sensitive": true
+        }
+      ]
+    }
+  ]
+}
+```
+
+### `env_var` Hint
+
+The `env_var` field is a **dashboard hint** for detecting existing shared variables:
+
+- **Not** automatic environment variable lookup by gateway
+- Used by dashboard to suggest reusing existing `{{LINEAR_API_KEY}}` variable
+- Reduces duplicate credential entry
+
+### Managing Catalog
+
+**Get current catalog:**
+```bash
+curl http://127.0.0.1:38100/api/admin/service-catalog
+```
+
+**Update catalog:**
+```bash
+curl -X PUT http://127.0.0.1:38100/api/admin/service-catalog \
+  -H 'Content-Type: application/json' \
+  -d @service-catalog.json
+```
+
+## MCP Runtime Features
+
+### Circuit Breaker
+
+Prevent cascading failures from unhealthy MCP servers:
+
+**Environment variables:**
+- `GATEWAY_MCP_CIRCUIT_BREAKER_FAILURES` (default: `3`) - Failures before opening circuit
+- `GATEWAY_MCP_CIRCUIT_BREAKER_COOLDOWN_SECONDS` (default: `10`) - Fail-fast duration
+
+**States:**
+- **Closed** - Normal operation, requests forwarded
+- **Open** - After N consecutive failures, fail fast without upstream call
+- **Half-Open** - After cooldown, try one request to test recovery
+
+**Disable:** Set `GATEWAY_MCP_CIRCUIT_BREAKER_FAILURES=0`
+
+### Retry Logic
+
+Automatic retry for transient failures:
+
+**Retryable conditions:**
+- Network timeout/connection errors
+- HTTP `429` (rate limit)
+- HTTP `502`, `503`, `504` (temporary server issues)
+
+**Not retryable:**
+- `400` (bad request)
+- `401`, `403` (auth required)
+- `404` (not found)
+- `500` (server error)
+
+**Retry strategy:**
+- Exponential backoff with jitter
+- Bounded attempts per request
+
+### Rate Limiting
+
+Per-connection, per-namespace burst limits:
+
+**Environment variables:**
+- `GATEWAY_CLAIM_REGISTRATION_RATE_LIMIT_PER_MINUTE` (default: `30`) - Claim submit attempts
+- `GATEWAY_MCP_TOOL_CALL_RATE_LIMIT_PER_MINUTE` (default: `120`) - MCP tool calls
+
+**Scope:** Limits are per `(connection_id, namespace)` pair
+
+**Disable:** Set limit to `0`
+
+### Timeouts
+
+Route-class timeout configuration:
+
+```bash
+GATEWAY_ADMIN_TIMEOUT_SECONDS=20     # Admin API routes
+GATEWAY_PROXY_TIMEOUT_SECONDS=120    # /proxy/* HTTP routes
+GATEWAY_MCP_TIMEOUT_SECONDS=90       # /mcp/* MCP routes
+```
+
+## Credential Rotation
+
+Manage credential lifecycle with rotation policies.
+
+### Rotation Metadata
+
+Connections track rotation status:
+
+```json
+{
+  "last_rotated_at": "2024-01-15T10:30:00Z",
+  "rotation_due_at": "2024-04-15T10:30:00Z",
+  "status": "rotation_required"
+}
+```
+
+### Enforcement Modes
+
+```bash
+GATEWAY_ROTATION_ENFORCEMENT=off|warn|block
+GATEWAY_ROTATION_GRACE_DAYS=30
+```
+
+**Modes:**
+- `off` - No enforcement, status indicator only
+- `warn` - Log warnings for overdue rotations
+- `block` - Reject requests with `ROTATION_REQUIRED` error
+
+### Rotation Workflow
+
+<Steps>
+  <Step title="Check rotation status">
+    ```bash
+    curl http://127.0.0.1:38100/api/admin/connections/sigilum-secure-slack
+    ```
+    
+    Check `rotation_due_at` field.
+  </Step>
+
+  <Step title="Rotate credential via API">
+    ```bash
+    curl -X POST http://127.0.0.1:38100/api/admin/connections/sigilum-secure-slack/rotate \
+      -H 'Content-Type: application/json' \
+      -d '{
+        "secrets": {
+          "bot_token": "xoxb-new-token"
+        }
+      }'
+    ```
+  </Step>
+
+  <Step title="Verify rotation">
+    ```bash
+    curl http://127.0.0.1:38100/api/admin/connections/sigilum-secure-slack/test
+    ```
+  </Step>
+</Steps>
+
+## Request Flow
+
+### HTTP Proxy Flow
+
+1. Client sends signed request to `/proxy/{connection_id}/...`
+2. Gateway verifies RFC 9421 signature
+3. Gateway checks nonce replay (in-memory)
+4. Gateway validates approved claim for `<namespace, agent_key, connection_id>`
+5. Gateway resolves connection config and secrets
+6. Gateway injects auth header (Bearer, custom, or query param)
+7. Gateway forwards to upstream API
+8. Gateway streams response back to client
+
+### MCP Runtime Flow
+
+1. Client sends signed request to `/mcp/{connection_id}/tools`
+2. Gateway verifies signature and claim (same as HTTP)
+3. Gateway checks discovery cache:
+   - **Hit + Fresh** → Return cached tools
+   - **Miss** → Fetch from MCP server, cache result
+   - **Stale** → Attempt refresh, fallback to stale on error
+4. Gateway applies tool filtering:
+   - Connection-level allowlist/denylist
+   - Subject-level policies
+5. Gateway returns filtered tool list
+
+### Tool Call Flow
+
+1. Client sends signed request to `/mcp/{connection_id}/tools/{tool}/call`
+2. Gateway verifies signature and claim
+3. Gateway checks circuit breaker state:
+   - **Open** → Return error immediately
+   - **Closed/Half-Open** → Proceed
+4. Gateway validates tool is allowed for subject
+5. Gateway constructs MCP JSON-RPC request
+6. Gateway forwards to MCP server with auth
+7. Gateway handles retries for transient failures
+8. Gateway streams response back to client
+
+## Error Codes
+
+Gateway returns structured error envelopes:
+
+```json
+{
+  "error": "Agent authorization required for this service",
+  "code": "AUTH_CLAIM_REQUIRED",
+  "request_id": "req_abc123",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "docs_url": "https://docs.sigilum.id/gateway/errors#AUTH_CLAIM_REQUIRED"
+}
+```
+
+### Common Codes
+
+- `AUTH_CLAIM_REQUIRED` - No approved claim for this agent+service
+- `AUTH_SIGNATURE_INVALID` - RFC 9421 signature verification failed
+- `AUTH_NONCE_INVALID` - Nonce missing or malformed
+- `AUTH_REPLAY_DETECTED` - Nonce already used
+- `CONNECTION_NOT_FOUND` - Connection ID doesn't exist
+- `ROTATION_REQUIRED` - Credential rotation overdue (block mode)
+- `RATE_LIMITED` - Too many requests
+- `MCP_DISCOVERY_FAILED` - Tool discovery failed
+- `MCP_TOOL_NOT_ALLOWED` - Tool denied by policy
+- `CIRCUIT_BREAKER_OPEN` - MCP server unhealthy
+
+## Security Considerations
+
+<Warning>
+**Local-only operation:**
+
+- Gateway is designed for single-instance, local operation
+- Nonce replay protection is process-local (resets on restart)
+- Secret storage is local filesystem (BadgerDB)
+- No HA/distributed consistency guarantees
+</Warning>
+
+### Admin API Access
+
+Control admin endpoint access:
+
+```bash
+GATEWAY_ADMIN_ACCESS_MODE=hybrid|loopback|token
+GATEWAY_ADMIN_TOKEN=<strong-random-token>
+```
+
+**Modes:**
+- `hybrid` (default) - Allow loopback OR valid admin token
+- `loopback` - Loopback only (127.0.0.1, ::1)
+- `token` - Token required from all clients
+
+### Signed Admin Checks
+
+Test and discover routes require signed auth by default:
+
+```bash
+GATEWAY_REQUIRE_SIGNED_ADMIN_CHECKS=true  # default
+```
+
+**Protected routes:**
+- `POST /api/admin/connections/{id}/test`
+- `POST /api/admin/connections/{id}/discover`
+
+**Bypass for local maintenance:**
+```bash
+GATEWAY_REQUIRE_SIGNED_ADMIN_CHECKS=false
+```
+
+<Warning>
+Only disable signed checks in trusted local environments.
+</Warning>
+
+### CORS Configuration
+
+Explicit origin allowlist for browser access:
+
+```bash
+GATEWAY_ALLOWED_ORIGINS=http://localhost:38000,http://127.0.0.1:38000,https://sigilum.id
+```
+
+### Proxy Trust
+
+Trust forwarded headers only from known proxies:
+
+```bash
+GATEWAY_TRUSTED_PROXY_CIDRS=127.0.0.1/32,::1/128,172.16.0.0/12
+```
+
+**Trusted headers:**
+- `X-Forwarded-For`
+- `X-Forwarded-Proto`
+- `X-Forwarded-Host`
+
+## Monitoring
+
+### Health Checks
+
+```bash
+curl http://localhost:38100/health        # Overall health
+curl http://localhost:38100/health/live   # Liveness probe
+curl http://localhost:38100/health/ready  # Readiness probe
+```
+
+### Metrics
+
+Prometheus metrics endpoint:
+
+```bash
+curl http://localhost:38100/metrics
+```
+
+**Key metrics:**
+- `sigilum_gateway_auth_reject_total{reason}` - Auth rejection reasons
+- `sigilum_gateway_upstream_requests_total{protocol,outcome}` - Request outcomes
+- `sigilum_gateway_mcp_discovery_total{result}` - Discovery attempts
+- `sigilum_gateway_mcp_tool_call_total{result}` - Tool call results
+- `sigilum_gateway_requests_in_flight` - Concurrent requests
+
+### Decision Logs
+
+Structured JSON logs for all auth/claim/proxy decisions:
+
+```bash
+GATEWAY_LOG_PROXY_REQUESTS=true
+```
+
+**Redaction:**
+- Secret fields → `[redacted]`
+- Identity fields → Hashed fingerprints
+- Client IPs → Masked (/24 for IPv4, /64 for IPv6)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="OpenClaw Integration" icon="robot" href="/integrations/openclaw">
+    Install Sigilum hooks and skills for OpenClaw agents
+  </Card>
+  <Card title="Claims Management" icon="shield-check" href="/api-reference/authorizations">
+    Approve and manage agent access claims
+  </Card>
+</CardGroup>

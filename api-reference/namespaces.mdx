@@ -1,0 +1,382 @@
+---
+title: 'Namespaces'
+description: 'Namespace resolution and authorization listing endpoints'
+---
+
+## Overview
+
+Namespaces are the core identity primitive in Sigilum. Each namespace maps to a DID (`did:sigilum:<namespace>`) and serves as the authorization boundary for agents.
+
+## Resolve Namespace
+
+<ParamField path="GET /v1/namespaces/{namespace}" type="endpoint">
+  Resolve a namespace to its current metadata and active claim count.
+</ParamField>
+
+Requires signed headers with valid agent certificate.
+
+### Path Parameters
+
+<ParamField path="namespace" type="string" required>
+  Namespace identifier (3-64 characters, alphanumeric and hyphens, must start and end with alphanumeric).
+  
+  **Example:** `acme-corp`
+</ParamField>
+
+### Response
+
+<ResponseField name="did" type="string" required>
+  Decentralized identifier for the namespace.
+  
+  **Example:** `did:sigilum:acme-corp`
+</ResponseField>
+
+<ResponseField name="namespace" type="string" required>
+  The namespace identifier.
+</ResponseField>
+
+<ResponseField name="owner" type="string" required>
+  User ID of the namespace owner.
+</ResponseField>
+
+<ResponseField name="created_at" type="string" required>
+  ISO 8601 timestamp when namespace was created.
+</ResponseField>
+
+<ResponseField name="active" type="boolean" required>
+  Whether the namespace is currently active.
+</ResponseField>
+
+<ResponseField name="active_claims" type="integer" required>
+  Number of currently approved authorizations in this namespace.
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://api.sigilum.id/v1/namespaces/acme-corp' \
+  -H 'signature-input: sig1=("@method" "@target-uri" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=1705320000;keyid="agent-key-1";alg="ed25519";nonce="n123"' \
+  -H 'signature: sig1=:MEUCIQDx...==:' \
+  -H 'sigilum-namespace: acme-corp' \
+  -H 'sigilum-subject: user@example.com' \
+  -H 'sigilum-agent-key: ed25519:LS0tLS...' \
+  -H 'sigilum-agent-cert: eyJ2ZXJzaW9u...'
+```
+
+```json Response
+{
+  "did": "did:sigilum:acme-corp",
+  "namespace": "acme-corp",
+  "owner": "usr_abc123",
+  "created_at": "2024-01-15T10:30:00Z",
+  "active": true,
+  "active_claims": 42
+}
+```
+
+</CodeGroup>
+
+### Error Responses
+
+| Status | Description |
+|--------|-------------|
+| 400 | Invalid namespace format |
+| 401 | Missing or invalid signature |
+| 404 | Namespace not found |
+| 503 | Database unavailable |
+
+---
+
+## List Approved Service Authorizations
+
+<ParamField path="GET /v1/namespaces/claims" type="endpoint">
+  Get approved authorization records for a service across namespaces (cache feed).
+</ParamField>
+
+Requires service API key and signed headers. Used by SDK/gateway to build local authorization cache.
+
+### Authentication
+
+<ParamField header="Authorization" type="string" required>
+  Service API key as Bearer token.
+  
+  ```
+  Bearer sk_live_...
+  ```
+</ParamField>
+
+Plus all standard signed headers.
+
+### Query Parameters
+
+<ParamField query="service" type="string">
+  Service slug filter. Must match the authenticated service when provided.
+  
+  **Example:** `my-service`
+</ParamField>
+
+<ParamField query="limit" type="integer" default="500">
+  Maximum number of claims to return (1-2000).
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of claims to skip.
+</ParamField>
+
+### Response
+
+<ResponseField name="claims" type="array" required>
+  Array of approved authorization records.
+  
+  <ResponseField name="claim_id" type="string" required>
+    Unique claim identifier.
+  </ResponseField>
+  
+  <ResponseField name="namespace" type="string" required>
+    Namespace the claim belongs to.
+  </ResponseField>
+  
+  <ResponseField name="public_key" type="string" required>
+    Agent public key (format: `ed25519:<base64>`).
+  </ResponseField>
+  
+  <ResponseField name="service" type="string" required>
+    Service slug.
+  </ResponseField>
+  
+  <ResponseField name="approved_at" type="string" required>
+    ISO 8601 timestamp when claim was approved.
+  </ResponseField>
+  
+  <ResponseField name="subject" type="string">
+    Subject identifier if provided.
+  </ResponseField>
+  
+  <ResponseField name="agent_id" type="string">
+    Agent ID if provided.
+  </ResponseField>
+  
+  <ResponseField name="agent_name" type="string">
+    Agent name if provided.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="pagination" type="object" required>
+  Pagination metadata.
+  
+  <ResponseField name="limit" type="integer" required>
+    Applied limit.
+  </ResponseField>
+  
+  <ResponseField name="offset" type="integer" required>
+    Applied offset.
+  </ResponseField>
+  
+  <ResponseField name="total" type="integer" required>
+    Total approved claims available.
+  </ResponseField>
+  
+  <ResponseField name="has_more" type="boolean" required>
+    Whether more results exist.
+  </ResponseField>
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://api.sigilum.id/v1/namespaces/claims?service=my-service&limit=100' \
+  -H 'Authorization: Bearer sk_live_abc123...' \
+  -H 'signature-input: sig1=("@method" "@target-uri" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=1705320000;keyid="agent-key-1";alg="ed25519";nonce="n456"' \
+  -H 'signature: sig1=:MEUCIQDx...==:' \
+  -H 'sigilum-namespace: my-service-ns' \
+  -H 'sigilum-subject: service@my-service.com' \
+  -H 'sigilum-agent-key: ed25519:LS0tLS...' \
+  -H 'sigilum-agent-cert: eyJ2ZXJzaW9u...'
+```
+
+```json Response
+{
+  "claims": [
+    {
+      "claim_id": "claim_abc123",
+      "namespace": "acme-corp",
+      "public_key": "ed25519:LS0tLS1CRUdJTi...",
+      "service": "my-service",
+      "approved_at": "2024-01-15T10:30:00Z",
+      "subject": "user@example.com",
+      "agent_id": "agent-001",
+      "agent_name": "Production Agent"
+    }
+  ],
+  "pagination": {
+    "limit": 100,
+    "offset": 0,
+    "total": 1,
+    "has_more": false
+  }
+}
+```
+
+</CodeGroup>
+
+### Error Responses
+
+| Status | Description |
+|--------|-------------|
+| 401 | Missing or invalid API key or signature |
+| 403 | Service mismatch (service param doesn't match authenticated service) |
+
+---
+
+## Get Namespace Authorization Requests
+
+<ParamField path="GET /v1/namespaces/{namespace}/claims" type="endpoint">
+  List authorization requests for a namespace with optional filtering.
+</ParamField>
+
+Requires namespace-owner authentication (dashboard cookie).
+
+### Path Parameters
+
+<ParamField path="namespace" type="string" required>
+  Namespace identifier.
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="status" type="string">
+  Filter by claim status.
+  
+  **Values:** `pending`, `approved`, `revoked`, `rejected`, `expired`
+</ParamField>
+
+<ParamField query="service" type="string">
+  Filter by service slug.
+</ParamField>
+
+<ParamField query="limit" type="integer" default="50">
+  Maximum number of claims to return (1-200).
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of claims to skip.
+</ParamField>
+
+### Response
+
+<ResponseField name="claims" type="array" required>
+  Array of authorization request records.
+  
+  <ResponseField name="claim_id" type="string" required>
+    Unique claim identifier.
+  </ResponseField>
+  
+  <ResponseField name="namespace" type="string" required>
+    Namespace identifier.
+  </ResponseField>
+  
+  <ResponseField name="service" type="string" required>
+    Service slug.
+  </ResponseField>
+  
+  <ResponseField name="public_key" type="string" required>
+    Agent public key.
+  </ResponseField>
+  
+  <ResponseField name="agent_ip" type="string" required>
+    IP address of agent at submission time.
+  </ResponseField>
+  
+  <ResponseField name="status" type="string" required>
+    Current claim status: `pending`, `approved`, `revoked`, `rejected`, `expired`.
+  </ResponseField>
+  
+  <ResponseField name="created_at" type="string" required>
+    When claim was created.
+  </ResponseField>
+  
+  <ResponseField name="approved_at" type="string">
+    When claim was approved (if applicable).
+  </ResponseField>
+  
+  <ResponseField name="revoked_at" type="string">
+    When claim was revoked (if applicable).
+  </ResponseField>
+  
+  <ResponseField name="approval_tx_hash" type="string">
+    Blockchain transaction hash for approval (if blockchain enabled).
+  </ResponseField>
+  
+  <ResponseField name="revocation_tx_hash" type="string">
+    Blockchain transaction hash for revocation (if blockchain enabled).
+  </ResponseField>
+  
+  <ResponseField name="subject" type="string">
+    Subject identifier.
+  </ResponseField>
+  
+  <ResponseField name="agent_id" type="string">
+    Agent identifier.
+  </ResponseField>
+  
+  <ResponseField name="agent_name" type="string">
+    Agent display name.
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="pagination" type="object" required>
+  Pagination metadata.
+</ResponseField>
+
+### Example Request
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://api.sigilum.id/v1/namespaces/acme-corp/claims?status=pending' \
+  -H 'Cookie: sigilum_token=eyJhbGciOiJIUzI1NiIs...'
+```
+
+```json Response
+{
+  "claims": [
+    {
+      "claim_id": "claim_xyz789",
+      "namespace": "acme-corp",
+      "service": "my-service",
+      "public_key": "ed25519:LS0tLS1CRUdJTi...",
+      "agent_ip": "203.0.113.45",
+      "status": "pending",
+      "created_at": "2024-01-15T10:30:00Z",
+      "approved_at": null,
+      "revoked_at": null,
+      "approval_tx_hash": null,
+      "revocation_tx_hash": null,
+      "subject": "user@example.com",
+      "agent_id": "agent-002",
+      "agent_name": "Development Agent"
+    }
+  ],
+  "pagination": {
+    "limit": 50,
+    "offset": 0,
+    "total": 1,
+    "has_more": false
+  }
+}
+```
+
+</CodeGroup>
+
+### Error Responses
+
+| Status | Description |
+|--------|-------------|
+| 400 | Invalid query parameters |
+| 401 | Not authenticated |
+| 403 | Not authorized for this namespace |
+| 503 | Database unavailable |

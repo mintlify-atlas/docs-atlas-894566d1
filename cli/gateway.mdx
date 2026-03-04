@@ -1,0 +1,401 @@
+---
+title: "Gateway Commands"
+description: "Start, connect, and manage the Sigilum gateway"
+---
+
+The `sigilum gateway` commands manage the local Sigilum gateway process, which enforces request signing, authorization checks, and proxies requests to upstream providers.
+
+## gateway start
+
+Start the Sigilum gateway service.
+
+### Usage
+
+```bash
+sigilum gateway start [options]
+```
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--namespace <value>` | Auto-detected | Target namespace |
+| `--home <path>` | `~/.sigilum-workspace` | Gateway Sigilum home directory |
+| `--api-url <url>` | `https://api.sigilum.id` | Sigilum API base URL |
+| `--addr <addr>` | `:38100` | Listen address |
+| `-h, --help` | - | Show help |
+
+### Namespace Resolution
+
+The namespace is resolved in this order:
+
+1. `--namespace` flag
+2. `SIGILUM_NAMESPACE` environment variable
+3. `GATEWAY_SIGILUM_NAMESPACE` environment variable
+4. `~/.sigilum/config.env` file (`SIGILUM_NAMESPACE` or `GATEWAY_SIGILUM_NAMESPACE`)
+5. Interactive prompt (if terminal is available)
+
+### Identity Auto-Bootstrap
+
+On first start, the gateway automatically:
+
+1. Creates a master key file at `<home>/gateway-master-key` (mode `0600`)
+2. Initializes Sigilum identity at `<home>/identities/<namespace>/identity.json`
+3. Registers the identity with the API
+
+### Examples
+
+Start gateway with auto-detected namespace:
+
+```bash
+sigilum gateway start
+```
+
+Output:
+```
+[i] sigilum 1.0.0 (gateway)
+Starting Sigilum gateway.
+  namespace: johndee
+  api:       https://api.sigilum.id
+  addr:      :38100
+  home:      /home/user/.sigilum-workspace
+
+Sigilum gateway running on :38100
+```
+
+Start gateway with explicit namespace:
+
+```bash
+sigilum gateway start --namespace johndee
+```
+
+Start gateway for local development:
+
+```bash
+sigilum gateway start \
+  --namespace johndee \
+  --api-url http://127.0.0.1:8787 \
+  --addr :38100
+```
+
+Start gateway with custom home directory:
+
+```bash
+sigilum gateway start \
+  --namespace johndee \
+  --home /var/sigilum/workspace
+```
+
+### Environment Variables
+
+The command recognizes these environment variables:
+
+- `SIGILUM_NAMESPACE` - Default namespace
+- `GATEWAY_SIGILUM_NAMESPACE` - Gateway-specific namespace
+- `GATEWAY_SIGILUM_HOME` - Gateway home directory
+- `SIGILUM_API_URL` - API base URL
+- `SIGILUM_REGISTRY_URL` - Alternative API URL variable
+- `GATEWAY_ADDR` - Listen address
+- `GATEWAY_MASTER_KEY` - Pre-generated master key
+
+### Master Key
+
+The gateway generates and stores a master encryption key at `<home>/gateway-master-key` on first start. This key encrypts sensitive data stored by the gateway.
+
+To use a pre-generated master key:
+
+```bash
+GATEWAY_MASTER_KEY=<hex-key> sigilum gateway start --namespace johndee
+```
+
+Or set it globally:
+
+```bash
+sigilum --gateway-master-key <hex-key> gateway start --namespace johndee
+```
+
+## gateway connect
+
+One-command managed onboarding that ensures gateway health (auto-starts if needed) and starts the pairing bridge in daemon mode.
+
+### Usage
+
+```bash
+sigilum gateway connect \
+  --session-id <id> \
+  --pair-code <code> \
+  --namespace <namespace> \
+  [options]
+```
+
+### Required Options
+
+| Option | Description |
+|--------|-------------|
+| `--session-id <id>` | Dashboard pairing session ID |
+| `--pair-code <code>` | Dashboard pairing code |
+| `--namespace <namespace>` | Target namespace |
+
+### Optional Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--api-url <url>` | `https://api.sigilum.id` | Sigilum API base URL |
+| `--gateway-admin-url <url>` | `http://127.0.0.1:38100` | Local gateway admin URL |
+| `--reconnect-ms <ms>` | `2000` | WebSocket reconnect delay |
+| `--connect-timeout-ms <ms>` | `5000` | Connection timeout |
+| `--gateway-start-timeout-seconds <n>` | - | Wait for gateway health timeout |
+| `--lifecycle-mode <mode>` | `auto` | Daemon lifecycle: `auto`, `stable`, `compat` |
+
+### Examples
+
+Connect gateway to managed dashboard:
+
+```bash
+sigilum gateway connect \
+  --session-id abc123def456 \
+  --pair-code XY7Z9W \
+  --namespace johndee \
+  --api-url https://api.sigilum.id
+```
+
+Output:
+```
+[i] sigilum 1.0.0 (gateway)
+[ok] Gateway is running at http://127.0.0.1:38100
+[ok] Starting pairing bridge in daemon mode...
+Gateway pair bridge started in background.
+  pid:      12345
+  pid_file: /home/user/.sigilum/run/gateway-pair-bridge.pid
+  log_file: /home/user/.sigilum/run/gateway-pair-bridge.log
+```
+
+Connect with custom gateway URL:
+
+```bash
+sigilum gateway connect \
+  --session-id abc123 \
+  --pair-code XY7Z9W \
+  --namespace johndee \
+  --gateway-admin-url http://192.168.1.10:38100
+```
+
+### Lifecycle Modes
+
+- `auto` (default): Use systemd user service on Linux if available, otherwise fallback to compat mode
+- `stable`: Require systemd user service (Linux only)
+- `compat`: Use `nohup` or `setsid` for background process
+
+## gateway pair
+
+Start the local WebSocket bridge used by dashboard pairing mode. This command establishes a persistent connection between your local gateway and the dashboard.
+
+### Usage
+
+```bash
+# Foreground mode (default)
+sigilum gateway pair \
+  --session-id <id> \
+  --pair-code <code> \
+  --namespace <namespace>
+
+# Daemon mode
+sigilum gateway pair --daemon \
+  --session-id <id> \
+  --pair-code <code> \
+  --namespace <namespace>
+
+# Status and control
+sigilum gateway pair --status
+sigilum gateway pair --stop
+```
+
+### Required Options
+
+| Option | Description |
+|--------|-------------|
+| `--session-id <id>` | Dashboard pairing session ID |
+| `--pair-code <code>` | Dashboard pairing code (6 characters) |
+| `--namespace <namespace>` | Target namespace |
+
+### Optional Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--api-url <url>` | Auto-detected | Sigilum API base URL |
+| `--gateway-admin-url <url>` | `http://127.0.0.1:38100` | Local gateway admin endpoint |
+| `--reconnect-ms <ms>` | `2000` | WebSocket reconnect delay |
+| `--connect-timeout-ms <ms>` | `5000` | HTTP/WebSocket timeout |
+| `--heartbeat-ms <ms>` | - | WebSocket heartbeat interval |
+| `--relay-timeout-ms <ms>` | - | Relay command timeout |
+
+### Daemon Options
+
+| Option | Description |
+|--------|-------------|
+| `--daemon` | Run bridge in background |
+| `--foreground` | Force foreground mode (default) |
+| `--lifecycle-mode <mode>` | Lifecycle mode: `auto`, `stable`, `compat` |
+| `--log-file <path>` | Daemon log file |
+| `--pid-file <path>` | Daemon pid file |
+| `--status` | Print daemon status |
+| `--stop` | Stop daemon process |
+
+### Examples
+
+Start pairing bridge in foreground:
+
+```bash
+sigilum gateway pair \
+  --session-id abc123def456 \
+  --pair-code XY7Z9W \
+  --namespace johndee
+```
+
+Output:
+```
+[i] sigilum 1.0.0 (gateway)
+[ok] Connecting to pairing session...
+[ok] WebSocket connected
+[ok] Pairing bridge ready
+Keep this process running while dashboard setup is active.
+```
+
+Start in daemon mode:
+
+```bash
+sigilum gateway pair --daemon \
+  --session-id abc123def456 \
+  --pair-code XY7Z9W \
+  --namespace johndee
+```
+
+Output:
+```
+[i] sigilum 1.0.0 (gateway)
+Gateway pair bridge started in background.
+  pid:      12345
+  pid_file: /home/user/.sigilum/run/gateway-pair-bridge.pid
+  log_file: /home/user/.sigilum/run/gateway-pair-bridge.log
+```
+
+Check daemon status:
+
+```bash
+sigilum gateway pair --status
+```
+
+Output:
+```
+Gateway pair bridge is running (pid=12345).
+  pid_file: /home/user/.sigilum/run/gateway-pair-bridge.pid
+  log_file: /home/user/.sigilum/run/gateway-pair-bridge.log
+```
+
+Stop daemon:
+
+```bash
+sigilum gateway pair --stop
+```
+
+Output:
+```
+Stopped gateway pair bridge (pid=12345).
+```
+
+### Systemd Integration (Linux)
+
+On Linux systems with systemd user service support, the daemon mode automatically creates and manages a systemd unit at `~/.config/systemd/user/sigilum-gateway-pair.service`.
+
+View systemd logs:
+
+```bash
+journalctl --user -u sigilum-gateway-pair.service -n 200 --no-pager
+```
+
+Manual systemd control:
+
+```bash
+systemctl --user status sigilum-gateway-pair
+systemctl --user restart sigilum-gateway-pair
+systemctl --user stop sigilum-gateway-pair
+```
+
+### Pairing Workflow
+
+1. Start your gateway with `sigilum gateway start --namespace johndee`
+2. In the dashboard, click "Start Pairing" to generate a session ID and pair code
+3. Run the connect command shown in the dashboard
+4. The bridge establishes a WebSocket connection and relays dashboard commands to your local gateway
+5. Complete provider setup in the dashboard
+6. The bridge automatically exits when pairing is complete
+
+### Important Notes
+
+- The `--api-url` must point to the Sigilum API service, not the dashboard app
+  - Managed default: `https://api.sigilum.id`
+  - Local OSS default: `http://127.0.0.1:8787`
+- Local gateway admin must be running on `--gateway-admin-url` for pairing relay to work
+- Namespace-owner JWT is not required for gateway pairing
+- Pairing sessions expire after a period of inactivity
+
+## Environment Variables
+
+All gateway commands recognize these environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `SIGILUM_NAMESPACE` | Default namespace |
+| `GATEWAY_SIGILUM_NAMESPACE` | Gateway-specific namespace |
+| `GATEWAY_SIGILUM_HOME` | Gateway home directory |
+| `SIGILUM_API_URL` | API base URL |
+| `SIGILUM_REGISTRY_URL` | Alternative API URL |
+| `GATEWAY_ADDR` | Gateway listen address |
+| `GATEWAY_ADMIN_URL` | Gateway admin endpoint URL |
+| `GATEWAY_MASTER_KEY` | Gateway master encryption key |
+| `GATEWAY_DATA_DIR` | Gateway data directory |
+
+## Troubleshooting
+
+### Gateway won't start
+
+Check if the port is already in use:
+
+```bash
+lsof -i :38100
+```
+
+Use a different port:
+
+```bash
+sigilum gateway start --namespace johndee --addr :38101
+```
+
+### Pairing fails to connect
+
+Verify gateway is running:
+
+```bash
+curl http://127.0.0.1:38100/health
+```
+
+Check pairing bridge logs:
+
+```bash
+tail -f ~/.sigilum/run/gateway-pair-bridge.log
+```
+
+### Session expired error
+
+Pairing sessions expire after inactivity. Start a new pairing session in the dashboard and use the new session ID and pair code.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="OpenClaw Commands" icon="puzzle-piece" href="/cli/openclaw">
+    Integrate with OpenClaw agents
+  </Card>
+  <Card title="Service Management" icon="gear" href="/cli/identity">
+    Add and configure services
+  </Card>
+</CardGroup>

@@ -1,0 +1,421 @@
+---
+title: RFC 9421 Signing Profile
+description: Sigilum HTTP message signature specification based on RFC 9421
+---
+
+## Overview
+
+Sigilum implements HTTP message signatures based on RFC 9421 with a specific profile for AI agent authentication. All signed requests use Ed25519 signatures and include required Sigilum headers for identity verification.
+
+**Profile name**: `sigilum-rfc9421-v1`  
+**Signature algorithm**: Ed25519  
+**Test vectors**: `sdks/test-vectors/http-signatures-rfc9421.json`
+
+## Signature Headers
+
+Every signed request includes two RFC 9421 headers:
+
+### Signature-Input
+
+Defines the signature parameters and components:
+
+```http
+Signature-Input: sig1=("@method" "@target-uri" "content-digest" 
+  "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" 
+  "sigilum-agent-cert");created=1700000000;nonce="123e4567-e89b-12d3-a456-426614174000";alg="ed25519";keyid="did:sigilum:alice#ed25519-99fb00dc16ee555a"
+```
+
+**Parameters:**
+- **created**: Unix timestamp when signature was created
+- **nonce**: Unique nonce for replay protection (UUID format)
+- **alg**: Signature algorithm (`ed25519` only)
+- **keyid**: DID URL identifying the signing key
+
+### Signature
+
+Contains the base64-encoded signature:
+
+```http
+Signature: sig1=:vGp+WLmSr0BWNci2lBhcJORg39ot+3Uu1aaVG2wGEKLItK/964hFaRrVd7DHf/2e3ykGpIacoM9Q5gs/tPy6Dw==:
+```
+
+## Signed Components
+
+The signature covers specific HTTP message components. The exact set depends on whether the request includes a body.
+
+### Without Body (GET, DELETE)
+
+**Required components:**
+- `@method` - HTTP method (lowercase)
+- `@target-uri` - Full request URI (fragments stripped)
+- `sigilum-namespace` - Owner namespace
+- `sigilum-subject` - Requester principal
+- `sigilum-agent-key` - Agent public key
+- `sigilum-agent-cert` - Agent certificate
+
+### With Body (POST, PUT, PATCH)
+
+**Required components:**
+- `@method` - HTTP method (lowercase)
+- `@target-uri` - Full request URI (fragments stripped)
+- `content-digest` - SHA-256 hash of request body
+- `sigilum-namespace` - Owner namespace
+- `sigilum-subject` - Requester principal
+- `sigilum-agent-key` - Agent public key
+- `sigilum-agent-cert` - Agent certificate
+
+## Component Details
+
+### @method (Derived Component)
+
+HTTP method in lowercase:
+
+```text
+"@method": get
+"@method": post
+"@method": put
+"@method": delete
+```
+
+**Canonicalization**: Always lowercase, regardless of how the request was sent.
+
+### @target-uri (Derived Component)
+
+Full request URI with fragments stripped:
+
+```text
+Original URL: https://api.sigilum.local/v1/namespaces/alice/claims?status=approved#fragment
+Canonical:    https://api.sigilum.local/v1/namespaces/alice/claims?status=approved
+```
+
+**Fragment stripping**: URL fragments (`#fragment`) are removed before signing.
+
+**Port handling**: Non-standard ports are preserved:
+```text
+https://api.sigilum.local:8443/v1/records/alpha?view=full
+```
+
+**Query encoding**: URL-encoded query parameters are preserved as-is:
+```text
+https://api.sigilum.local/v1/audit/events?cursor=abc%2F123&limit=50
+```
+
+### content-digest (Header)
+
+SHA-256 hash of the request body in RFC 9530 format:
+
+```http
+Content-Digest: sha-256=:5toCTO6LRikiTvJ0Ha+F6ucUxaTs3wMsnaImDBR0NZg=:
+```
+
+**Computation:**
+1. Take the raw request body bytes
+2. Compute SHA-256 hash
+3. Encode in base64
+4. Wrap in RFC 9530 format: `sha-256=:base64hash:`
+
+**Example body:**
+```json
+{"action":"approve"}
+```
+
+**Expected digest:**
+```text
+sha-256=:5toCTO6LRikiTvJ0Ha+F6ucUxaTs3wMsnaImDBR0NZg=:
+```
+
+**Requirement**: MUST be present when request has a body, MUST be omitted when no body.
+
+### sigilum-namespace (Header)
+
+The owner namespace:
+
+```http
+Sigilum-Namespace: alice
+```
+
+**Validation**: Must match the namespace in the agent certificate and DID.
+
+### sigilum-subject (Header)
+
+The requester principal identifier:
+
+```http
+Sigilum-Subject: customer-12345
+```
+
+**Purpose**: Stable requester principal ID within the namespace. Services can apply subject-aware policies (e.g., MCP tool filtering).
+
+**Default behavior**: When omitted at signing time, SDKs default to the signer namespace.
+
+**Responsibility**: Platforms must set this accurately to reflect "who triggered this action" (authenticated human or system identity).
+
+### sigilum-agent-key (Header)
+
+The agent's public key:
+
+```http
+Sigilum-Agent-Key: ed25519:J07dj/co4diCmQYTTQGq4adhnMKYejHazCYUQ7eBh0k=
+```
+
+**Format**: `ed25519:<base64-encoded-public-key>`
+
+**Validation**: Must match the public key in the certificate and be authorized for the namespace.
+
+### sigilum-agent-cert (Header)
+
+The agent's certificate (JSON, base64-encoded):
+
+```http
+Sigilum-Agent-Cert: eyJ2ZXJzaW9uIjoxLCJuYW1lc3BhY2UiOiJmaXh0dXJlLWFsaWNlIiwiZGlkIjoiZGlkOnNpZ2lsdW06Zml4dHVyZS1hbGljZSIsImtleUlkIjoiZGlkOnNpZ2lsdW06Zml4dHVyZS1hbGljZSNlZDI1NTE5LTk5ZmIwMGRjMTZlZTU1NWEiLCJwdWJsaWNLZXkiOiJlZDI1NTE5OkowN2RqL2NvNGRpQ21RWVRUUUdxNGFkaG5NS1llakhhekhZVVE3ZUJoMGs9IiwiaXNzdWVkQXQiOiIyMDI2LTAyLTIwVDE4OjA0OjI2WiIsImV4cGlyZXNBdCI6bnVsbCwicHJvb2YiOnsiYWxnIjoiZWQyNTUxOSIsInNpZyI6InZHcC1XTG1TcjBCV05jaTJsQmhjSk9SZzM5b3QtM1V1MWFhVkcyd0dFS0xJdEtfOTY0aEZhUnJWZDdESGZfMmUzeWtHcElhY29NOVE1Z3NfdFB5NkR3In0sImlzc3VlZEJ5Ijoic2lnaWx1bS5sb2NhbC1maXh0dXJlIn0=
+```
+
+**Format**: Base64-encoded JSON certificate object
+
+**Certificate structure** (decoded):
+```json
+{
+  "version": 1,
+  "namespace": "fixture-alice",
+  "did": "did:sigilum:fixture-alice",
+  "keyId": "did:sigilum:fixture-alice#ed25519-99fb00dc16ee555a",
+  "publicKey": "ed25519:J07dj/co4diCmQYTTQGq4adhnMKYejHazCYUQ7eBh0k=",
+  "issuedAt": "2026-02-20T18:04:26Z",
+  "expiresAt": null,
+  "proof": {
+    "alg": "ed25519",
+    "sig": "vGp-WLmSr0BWNci2lBhcJORg39ot-3Uu1aaVG2wGEKLItK_964hFaRrVd7DHf_2e3ykGpIacoM9Q5gs_tPy6Dw"
+  },
+  "issuedBy": "sigilum.local-fixture"
+}
+```
+
+## Certificate Proof Format
+
+The certificate includes a self-signature over a canonical text representation.
+
+### Canonical Certificate Text
+
+Certificate proof signs UTF-8 text with newline-separated fields:
+
+```text
+sigilum-certificate-v1
+namespace:<namespace>
+did:<did>
+key-id:<keyId>
+public-key:<publicKey>
+issued-at:<issuedAt>
+expires-at:<expiresAt-or-empty>
+```
+
+**Example:**
+```text
+sigilum-certificate-v1
+namespace:fixture-alice
+did:did:sigilum:fixture-alice
+key-id:did:sigilum:fixture-alice#ed25519-99fb00dc16ee555a
+public-key:ed25519:J07dj/co4diCmQYTTQGq4adhnMKYejHazCYUQ7eBh0k=
+issued-at:2026-02-20T18:04:26Z
+expires-at:
+```
+
+**Field ordering**: Fields MUST appear in this exact order.
+
+**Empty expiration**: When `expiresAt` is `null`, the line ends after the colon.
+
+## Signature Verification
+
+Verifiers MUST validate:
+
+1. **Signature headers present**: `Signature-Input` and `Signature` headers exist
+2. **Headers parseable**: Headers conform to RFC 9421 syntax
+3. **Certificate valid**: Agent certificate is valid and not expired
+4. **Namespace consistency**: Namespace matches across headers, certificate, and DID
+5. **Key consistency**: Public key matches between `sigilum-agent-key` and certificate
+6. **KeyID consistency**: `keyid` parameter matches certificate `keyId`
+7. **Content digest**: If body exists, `content-digest` matches computed hash
+8. **Signature correctness**: Ed25519 signature verifies against the canonical signature base
+9. **Timestamp freshness**: `created` timestamp is recent (implementation-defined window)
+10. **Nonce uniqueness**: Nonce has not been seen before (replay protection)
+
+**Stable error codes**: SDKs expose machine-readable codes on verification failure:
+- `SIG_CONTENT_DIGEST_MISMATCH` - Content digest doesn't match body
+- `SIG_INVALID_SIGNATURE` - Ed25519 signature verification failed
+- `SIG_EXPIRED` - Signature timestamp too old
+- `SIG_NONCE_REPLAY` - Nonce already used
+- `SIG_NAMESPACE_MISMATCH` - Namespace inconsistency
+- `SIG_KEY_MISMATCH` - Key inconsistency
+
+## Test Vectors
+
+Shared conformance vectors in `sdks/test-vectors/http-signatures-rfc9421.json` include:
+
+### Positive Vectors
+
+**GET request without body:**
+```json
+{
+  "name": "get-no-body-fragment",
+  "method": "GET",
+  "url": "https://api.sigilum.local/v1/namespaces/alice/claims?status=approved#fragment",
+  "body": null,
+  "expected_target_uri": "https://api.sigilum.local/v1/namespaces/alice/claims?status=approved",
+  "expected_method_component": "get",
+  "expected_components": [
+    "@method",
+    "@target-uri",
+    "sigilum-namespace",
+    "sigilum-subject",
+    "sigilum-agent-key",
+    "sigilum-agent-cert"
+  ]
+}
+```
+
+**POST request with body:**
+```json
+{
+  "name": "post-with-body",
+  "method": "POST",
+  "url": "https://api.sigilum.local/v1/namespaces/alice/claims",
+  "body": "{\"action\":\"approve\"}",
+  "expected_target_uri": "https://api.sigilum.local/v1/namespaces/alice/claims",
+  "expected_method_component": "post",
+  "expected_content_digest": "sha-256=:5toCTO6LRikiTvJ0Ha+F6ucUxaTs3wMsnaImDBR0NZg=:",
+  "expected_components": [
+    "@method",
+    "@target-uri",
+    "content-digest",
+    "sigilum-namespace",
+    "sigilum-subject",
+    "sigilum-agent-key",
+    "sigilum-agent-cert"
+  ]
+}
+```
+
+**PUT request with query and port:**
+```json
+{
+  "name": "put-with-body-query-and-port",
+  "method": "PUT",
+  "url": "https://api.sigilum.local:8443/v1/records/alpha?view=full#section",
+  "body": "{\"text\":\"hello world\",\"count\":42}",
+  "expected_target_uri": "https://api.sigilum.local:8443/v1/records/alpha?view=full",
+  "expected_method_component": "put",
+  "expected_content_digest": "sha-256=:Xruw00DsBxReBcikx32MJ+Rs/9hMiEJ6/vjfZhtV2Mc=:"
+}
+```
+
+**DELETE with encoded query:**
+```json
+{
+  "name": "delete-no-body-encoded-query",
+  "method": "DELETE",
+  "url": "https://api.sigilum.local/v1/audit/events?cursor=abc%2F123&limit=50#ignored",
+  "body": null,
+  "expected_target_uri": "https://api.sigilum.local/v1/audit/events?cursor=abc%2F123&limit=50",
+  "expected_method_component": "delete"
+}
+```
+
+### Negative Vectors (Tamper Detection)
+
+**Tampered method:**
+```json
+{
+  "name": "tampered-method",
+  "source_vector": "get-no-body-fragment",
+  "mutation": "method",
+  "value": "POST",
+  "expected_reason_contains": "signature"
+}
+```
+
+**Tampered namespace header:**
+```json
+{
+  "name": "tampered-namespace-header",
+  "source_vector": "get-no-body-fragment",
+  "mutation": "header",
+  "field": "sigilum-namespace",
+  "value": "mallory",
+  "expected_reason_contains": "namespace"
+}
+```
+
+**Tampered body (content-digest mismatch):**
+```json
+{
+  "name": "tampered-body-content-digest",
+  "source_vector": "post-with-body",
+  "mutation": "body",
+  "value": "{\"action\":\"deny\"}",
+  "expected_reason_contains": "content-digest"
+}
+```
+
+## Fixed Test Values
+
+Test vectors use fixed values for reproducibility:
+
+```json
+{
+  "created": 1700000000,
+  "nonce": "123e4567-e89b-12d3-a456-426614174000"
+}
+```
+
+**Production behavior**: In production, SDKs rotate these values:
+- `created`: Current Unix timestamp
+- `nonce`: Fresh UUID v4 for each request
+
+## SDK Implementation Requirements
+
+All SDKs MUST:
+
+1. **Generate signatures** conforming to this profile
+2. **Strip URL fragments** before signing `@target-uri`
+3. **Lowercase HTTP methods** in `@method` component
+4. **Include content-digest** when request has a body
+5. **Omit content-digest** when request has no body
+6. **Verify all required components** when validating signatures
+7. **Check certificate proof** signature
+8. **Enforce namespace/key consistency** across headers
+9. **Provide stable error codes** for verification failures
+10. **Pass conformance tests** using shared test vectors
+
+## Example Complete Request
+
+**Request:**
+```http
+POST /v1/namespaces/alice/claims HTTP/1.1
+Host: api.sigilum.local
+Content-Type: application/json
+Content-Digest: sha-256=:5toCTO6LRikiTvJ0Ha+F6ucUxaTs3wMsnaImDBR0NZg=:
+Sigilum-Namespace: alice
+Sigilum-Subject: customer-12345
+Sigilum-Agent-Key: ed25519:J07dj/co4diCmQYTTQGq4adhnMKYejHazCYUQ7eBh0k=
+Sigilum-Agent-Cert: eyJ2ZXJzaW9uIjoxLC4uLn0=
+Signature-Input: sig1=("@method" "@target-uri" "content-digest" "sigilum-namespace" "sigilum-subject" "sigilum-agent-key" "sigilum-agent-cert");created=1700000000;nonce="123e4567-e89b-12d3-a456-426614174000";alg="ed25519";keyid="did:sigilum:alice#ed25519-99fb00dc16ee555a"
+Signature: sig1=:vGp+WLmSr0BWNci2lBhcJORg39ot+3Uu1aaVG2wGEKLItK/964hFaRrVd7DHf/2e3ykGpIacoM9Q5gs/tPy6Dw==:
+
+{"action":"approve"}
+```
+
+## Related Documentation
+
+<CardGroup cols={2}>
+  <Card title="Protocol Overview" icon="book" href="/protocol/overview">
+    High-level protocol documentation
+  </Card>
+  <Card title="Security" icon="shield" href="/protocol/security">
+    Security considerations and best practices
+  </Card>
+  <Card title="TypeScript SDK" icon="code" href="/sdks/typescript">
+    Implementation in TypeScript
+  </Card>
+  <Card title="Test Vectors" icon="vial" href="https://github.com/sigilum/sigilum/blob/main/sdks/test-vectors/http-signatures-rfc9421.json">
+    Complete test vector suite
+  </Card>
+</CardGroup>

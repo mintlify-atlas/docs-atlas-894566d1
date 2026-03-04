@@ -1,0 +1,214 @@
+---
+title: "CLI Overview"
+description: "Install and use the Sigilum command-line interface"
+---
+
+The Sigilum CLI (`sigilum`) is the primary tool for managing Sigilum infrastructure, gateway operations, service configuration, and OpenClaw integration.
+
+## Installation
+
+### Quick Install (Managed Mode)
+
+Install from GitHub releases:
+
+```bash
+curl -fsSL https://github.com/PaymanAI/sigilum/releases/latest/download/install-curl.sh | bash
+```
+
+Reload your shell:
+
+```bash
+source ~/.zshrc  # or ~/.bashrc
+```
+
+Verify installation:
+
+```bash
+sigilum version
+```
+
+### Install from Source (Development)
+
+Clone and install from the repository:
+
+```bash
+git clone https://github.com/PaymanAI/sigilum.git
+cd sigilum
+./sigilum install
+source ~/.zshrc
+```
+
+### Installation Options
+
+The curl installer accepts several options:
+
+```bash
+curl -fsSL ... | bash -s -- [options]
+```
+
+- `--prefix <path>` - Install location (default: `~/.sigilum`)
+- `--repo <owner/name>` - GitHub repo override (default: `PaymanAI/sigilum`)
+- `--version <tag>` - Install a specific version (default: latest)
+- `--tarball-url <url>` - Install from explicit tarball URL
+- `--checksum <sha256>` - Expected SHA-256 for tarball verification
+- `--release-pubkey-file <path>` - PEM public key for signature verification
+- `--require-signature` - Require release checksum signature verification
+
+The source installer (`./sigilum install`) supports:
+
+- `--bin-dir <path>` - Symlink destination (default: `~/.local/bin`)
+- `--rc-file <path>` - Shell rc file to update (auto-detected by default)
+- `--with-alias` - Add `alias sigilum="<repo>/sigilum"` to rc file
+
+## Global Options
+
+Global options must be specified before the command:
+
+```bash
+sigilum [global-options] <command> [args]
+```
+
+| Option | Environment Variable | Description |
+|--------|---------------------|-------------|
+| `--namespace <value>` | `GATEWAY_SIGILUM_NAMESPACE` | Set the target namespace |
+| `--sigilum-home <path>` | `GATEWAY_SIGILUM_HOME` | Gateway home directory |
+| `--gateway-admin-url <url>` | `GATEWAY_ADMIN_URL` | Gateway admin endpoint URL |
+| `--gateway-data-dir <path>` | `GATEWAY_DATA_DIR` | Gateway data directory |
+| `--gateway-master-key <value>` | `GATEWAY_MASTER_KEY` | Gateway master encryption key |
+| `--api-port <port>` | `API_PORT` | API server port |
+| `--gateway-port <port>` | `GATEWAY_PORT` | Gateway server port |
+| `--native-port <port>` | `NATIVE_PORT` | Native service port |
+| `--upstream-port <port>` | `UPSTREAM_PORT` | Upstream service port |
+| `-v, --version` | - | Show version information |
+| `-h, --help` | - | Show help message |
+
+### Namespace Configuration
+
+If neither `GATEWAY_SIGILUM_NAMESPACE` nor `SIGILUM_NAMESPACE` is set, Sigilum loads a default namespace from `~/.sigilum/config.env`.
+
+Example `~/.sigilum/config.env`:
+
+```bash
+SIGILUM_NAMESPACE=johndee
+SIGILUM_API_URL=https://api.sigilum.id
+```
+
+## Commands Overview
+
+### Core Commands
+
+| Command | Description |
+|---------|-------------|
+| `sigilum version` | Show sigilum version |
+| `sigilum versions` | Show all component versions |
+| `sigilum install` | Install sigilum command into your shell |
+| `sigilum help [command]` | Show help for a command |
+
+### Gateway Commands
+
+| Command | Description |
+|---------|-------------|
+| `sigilum gateway start` | Start the Sigilum gateway |
+| `sigilum gateway connect` | One-command managed onboarding |
+| `sigilum gateway pair` | Start pairing bridge for dashboard |
+
+### OpenClaw Commands
+
+| Command | Description |
+|---------|-------------|
+| `sigilum openclaw connect` | One-command OpenClaw onboarding |
+| `sigilum openclaw install` | Install Sigilum hooks/skills |
+| `sigilum openclaw uninstall` | Remove Sigilum from OpenClaw |
+| `sigilum openclaw status` | Show OpenClaw installation status |
+
+### Authentication Commands
+
+| Command | Description |
+|---------|-------------|
+| `sigilum auth login` | Bootstrap namespace-owner JWT token |
+| `sigilum auth refresh` | Refresh local JWT token |
+| `sigilum auth show` | Display stored JWT token |
+| `sigilum login` | Alias for `sigilum auth login` |
+
+### Service Management
+
+| Command | Description |
+|---------|-------------|
+| `sigilum service add` | Register a service |
+| `sigilum service list` | List registered services |
+| `sigilum service secret set` | Update service credentials |
+
+### Development Commands
+
+| Command | Description |
+|---------|-------------|
+| `sigilum up` | Start local API + gateway |
+| `sigilum down` | Stop local services |
+| `sigilum doctor` | Validate local setup |
+| `sigilum e2e-tests` | Run end-to-end tests |
+| `sigilum agent-simulator` | Run agent auth simulator |
+
+## Version Information
+
+Show the current Sigilum version:
+
+```bash
+sigilum version
+```
+
+Output:
+```
+sigilum 1.0.0
+```
+
+Show all component versions:
+
+```bash
+sigilum versions
+```
+
+Output:
+```
+Sigilum Component Versions
+  sigilum                  1.0.0
+  root                     1.0.0
+  apps                     1.0.0
+  api                      1.0.0
+  gateway                  1.0.0
+  dashboard                1.0.0
+  openclaw                 1.0.0
+  ...
+```
+
+## Getting Help
+
+Show top-level help:
+
+```bash
+sigilum --help
+```
+
+Show command-specific help:
+
+```bash
+sigilum gateway --help
+sigilum openclaw install --help
+sigilum service add --help
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Gateway Commands" icon="server" href="/cli/gateway">
+    Learn how to manage the Sigilum gateway
+  </Card>
+  <Card title="OpenClaw Integration" icon="puzzle-piece" href="/cli/openclaw">
+    Integrate Sigilum with OpenClaw agents
+  </Card>
+  <Card title="Service Management" icon="gear" href="/cli/identity">
+    Add and manage services
+  </Card>
+  <Card title="Authentication" icon="key" href="/cli/identity">
+    Manage namespace-owner credentials
+  </Card>
+</CardGroup>

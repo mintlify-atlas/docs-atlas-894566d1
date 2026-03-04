@@ -1,0 +1,186 @@
+---
+title: 'API Overview'
+description: 'Introduction to the Sigilum API for agent identity and authorization'
+---
+
+## Introduction
+
+The Sigilum API provides a namespace-based agent identity and authorization system. It manages:
+
+- Namespace identity (`did:sigilum:<namespace>`)
+- Authorization request lifecycle (submit, approve, reject, revoke)
+- Agent verification and DID document resolution
+- Service registration and API key management
+- Webhook delivery for authorization events
+
+## Base URLs
+
+<ParamField path="Production" type="string">
+  ```
+  https://api.sigilum.id
+  ```
+  The production API endpoint for all live applications.
+</ParamField>
+
+<ParamField path="Local Development" type="string">
+  ```
+  http://localhost:8787
+  ```
+  Local development server for testing and development.
+</ParamField>
+
+## API Architecture
+
+The Sigilum API follows a role-based architecture:
+
+### Namespace Owners
+- Register and manage namespaces via dashboard authentication (WebAuthn + JWT cookies)
+- Create and configure services
+- Approve, reject, or revoke authorization requests
+- View authorization history for their namespace
+
+### Services
+- Authenticate using service API keys (Bearer tokens)
+- Submit authorization requests on behalf of agents
+- Verify agent authorization status
+- Receive webhook notifications for authorization lifecycle events
+- Cache approved authorizations for performance
+
+### Agents
+- Present cryptographic identity (Ed25519 public keys)
+- Sign all API requests using HTTP message signatures (RFC 9421)
+- Use namespace-bound certificates issued by gateway
+
+## Authentication Methods
+
+### Signed Headers (Service & Agent Requests)
+
+All protected API endpoints require Sigilum signed headers following RFC 9421:
+
+<ParamField header="signature-input" type="string" required>
+  RFC 9421 Signature-Input header containing the signature metadata and signed components list.
+</ParamField>
+
+<ParamField header="signature" type="string" required>
+  RFC 9421 Signature header containing the base64-encoded Ed25519 signature.
+</ParamField>
+
+<ParamField header="sigilum-namespace" type="string" required>
+  Namespace identifier bound to the signing certificate.
+</ParamField>
+
+<ParamField header="sigilum-subject" type="string" required>
+  Subject identifier for user-scoped policy checks. Must be included in signed components.
+</ParamField>
+
+<ParamField header="sigilum-agent-key" type="string" required>
+  Agent public key in format `ed25519:<base64>`.
+</ParamField>
+
+<ParamField header="sigilum-agent-cert" type="string" required>
+  Base64url-encoded Sigilum agent certificate JSON.
+</ParamField>
+
+<ParamField header="content-digest" type="string">
+  Required for requests with a non-empty body. SHA-256 digest of the exact request body in format `sha-256=:<base64>:`.
+</ParamField>
+
+### Bearer Token (Service API Key)
+
+Service endpoints require both signed headers and a Bearer token:
+
+```bash
+Authorization: Bearer <service_api_key>
+```
+
+### Cookie Authentication (Dashboard)
+
+Dashboard endpoints use session cookies:
+
+```
+Cookie: sigilum_token=<jwt_token>
+```
+
+## Authorization Flow
+
+1. **Service Registration**: Namespace owner creates service and generates API key
+2. **Authorization Request**: Service submits claim for agent public key
+3. **Approval**: Namespace owner reviews and approves/rejects request
+4. **Verification**: Service verifies agent authorization status
+5. **Revocation**: Namespace owner can revoke approved authorization
+
+## Error Responses
+
+All errors follow a consistent format:
+
+<ResponseField name="error" type="string" required>
+  Human-readable error message.
+</ResponseField>
+
+<ResponseField name="code" type="string">
+  Machine-readable error code (e.g., `SIGNATURE_INVALID`, `NAMESPACE_NOT_FOUND`).
+</ResponseField>
+
+<ResponseField name="details" type="object">
+  Additional error context when available.
+</ResponseField>
+
+### Common Error Codes
+
+| Status | Code | Description |
+|--------|------|-------------|
+| 400 | `INVALID_REQUEST` | Malformed request or invalid parameters |
+| 401 | `SIGNATURE_MISSING` | Required signed headers not provided |
+| 401 | `SIGNATURE_INVALID` | Signature verification failed |
+| 401 | `SIGNATURE_EXPIRED` | Signature timestamp outside valid window |
+| 403 | `SIGNATURE_NAMESPACE_MISMATCH` | Namespace does not match certificate |
+| 403 | `FORBIDDEN` | Insufficient permissions |
+| 404 | `NOT_FOUND` | Resource does not exist |
+| 409 | `CONFLICT` | Resource already exists or state conflict |
+| 503 | `SERVICE_UNAVAILABLE` | Temporary service unavailability |
+
+## Rate Limiting
+
+Rate limits are enforced per API key or authenticated session. Current limits:
+
+- **Service API requests**: 1000 requests per minute
+- **Dashboard requests**: 100 requests per minute
+- **Verification endpoint**: 2000 requests per minute (optimized for high-throughput)
+
+## Pagination
+
+List endpoints support pagination with consistent parameters:
+
+<ParamField query="limit" type="integer" default="50">
+  Maximum number of items to return (1-200 for most endpoints, up to 2000 for approved claims cache).
+</ParamField>
+
+<ParamField query="offset" type="integer" default="0">
+  Number of items to skip before returning results.
+</ParamField>
+
+Pagination responses include:
+
+<ResponseField name="pagination" type="object">
+  <ResponseField name="limit" type="integer" required>
+    Applied limit value.
+  </ResponseField>
+  <ResponseField name="offset" type="integer" required>
+    Applied offset value.
+  </ResponseField>
+  <ResponseField name="total" type="integer" required>
+    Total number of items available.
+  </ResponseField>
+  <ResponseField name="has_more" type="boolean" required>
+    Whether more items exist beyond current page.
+  </ResponseField>
+</ResponseField>
+
+## SDKs and Tools
+
+Official SDKs and tools:
+
+- **@sigilum/gateway**: Local gateway for agent certificate management and request signing
+- **@sigilum/sdk**: Client SDK for Node.js applications
+
+See the [SDK documentation](/sdk/overview) for integration details.

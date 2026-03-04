@@ -1,0 +1,434 @@
+---
+title: "OpenClaw Commands"
+description: "Integrate Sigilum with OpenClaw agents"
+---
+
+The `sigilum openclaw` commands manage the integration between Sigilum and OpenClaw, including installation of hooks, skills, and runtime components.
+
+## openclaw connect
+
+One-command managed onboarding that performs gateway connect, OpenClaw installation, and immediate agent key bootstrap.
+
+### Usage
+
+```bash
+sigilum openclaw connect \
+  --session-id <id> \
+  --pair-code <code> \
+  --namespace <namespace> \
+  [options]
+```
+
+### Required Options
+
+| Option | Description |
+|--------|-------------|
+| `--session-id <id>` | Dashboard pairing session ID |
+| `--pair-code <code>` | Dashboard pairing code |
+| `--namespace <namespace>` | Target namespace |
+
+### Optional Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--api-url <url>` | `https://api.sigilum.id` | Sigilum API base URL |
+| `--gateway-url <url>` | `http://127.0.0.1:38100` | Gateway URL |
+| `--openclaw-home <path>` | `~/.openclaw` | OpenClaw home directory |
+| `--mode <mode>` | `managed` | Sigilum mode: `managed` or `oss-local` |
+
+### Examples
+
+One-command managed onboarding:
+
+```bash
+sigilum openclaw connect \
+  --session-id abc123def456 \
+  --pair-code XY7Z9W \
+  --namespace johndee \
+  --api-url https://api.sigilum.id
+```
+
+Output:
+```
+[i] sigilum 1.0.0 (openclaw)
+[ok] Starting gateway connect...
+[ok] Gateway pair bridge started
+[ok] Installing OpenClaw integration...
+[ok] Sigilum OpenClaw integration installed
+[ok] Agent key bootstrap complete
+```
+
+## openclaw install
+
+Install Sigilum hooks, skills, and runtime into OpenClaw.
+
+### Usage
+
+```bash
+sigilum openclaw install [options]
+```
+
+### Common Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--mode <mode>` | `managed` | Sigilum mode: `managed` or `oss-local` |
+| `--namespace <value>` | Interactive prompt | Target namespace |
+| `--openclaw-home <path>` | `~/.openclaw` | OpenClaw home directory |
+| `--config <path>` | `<openclaw-home>/openclaw.json` | OpenClaw config path |
+| `--gateway-url <url>` | Mode default | Gateway URL |
+| `--api-url <url>` | Mode default | API URL |
+| `--dashboard-url <url>` | Mode default | Dashboard URL |
+| `--interactive` | Auto-detect | Force onboarding prompts |
+| `--non-interactive` | Auto-detect | Disable onboarding prompts |
+| `--restart` | `false` | Restart OpenClaw after install |
+
+### Managed Mode Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--api-url <url>` | `https://api.sigilum.id` | Sigilum API base URL |
+| `--dashboard-url <url>` | `https://sigilum.id` | Dashboard URL |
+| `--gateway-url <url>` | `http://127.0.0.1:38100` | Gateway URL |
+
+### OSS-Local Mode Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--source-home <path>` | - | Sigilum source checkout root (required) |
+| `--api-url <url>` | `http://127.0.0.1:8787` | Local API URL |
+| `--dashboard-url <url>` | `http://127.0.0.1:8788` | Local dashboard URL |
+| `--gateway-url <url>` | `http://127.0.0.1:38100` | Local gateway URL |
+| `--auto-start-sigilum <bool>` | `true` | Auto-start local stack when down |
+
+### Authorization Notify Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--enable-authz-notify <bool>` | `false` | Enable authorization notification hook |
+| `--owner-token <token>` | - | Namespace-owner JWT (required if notify enabled) |
+| `--auto-owner-token <bool>` | `true` (oss-local) | Auto-issue owner token |
+| `--owner-email <email>` | `<namespace>@local.sigilum` | Owner email |
+
+### Runtime Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--key-root <path>` | Auto-detected | Key storage root |
+| `--runtime-root <path>` | Auto-detected | Runtime binary root |
+
+### Examples
+
+Interactive install (managed mode):
+
+```bash
+sigilum openclaw install
+```
+
+Output:
+```
+[i] sigilum 1.0.0 (openclaw)
+Sigilum namespace: johndee
+OpenClaw home directory [~/.openclaw]: 
+Sigilum API URL [https://api.sigilum.id]: 
+
+[ok] Installing Sigilum hooks...
+[ok] Installing Sigilum skills...
+[ok] Updating openclaw.json...
+[ok] Sigilum OpenClaw integration installed
+
+Next steps:
+  1. Sign in at https://sigilum.id
+  2. Reserve your namespace: johndee
+  3. Run: sigilum auth login --mode managed --namespace johndee --owner-token-stdin
+```
+
+Non-interactive install (managed mode):
+
+```bash
+sigilum openclaw install \
+  --namespace johndee \
+  --non-interactive
+```
+
+OSS-local mode install:
+
+```bash
+sigilum openclaw install \
+  --mode oss-local \
+  --namespace johndee \
+  --api-url http://127.0.0.1:8787
+```
+
+Output:
+```
+[i] sigilum 1.0.0 (openclaw)
+[ok] Installing Sigilum hooks...
+[ok] Installing Sigilum skills...
+[ok] Auto-registering namespace owner...
+[ok] Issuing namespace-owner JWT...
+[ok] Writing token to ~/.openclaw/.sigilum/owner-token-johndee.jwt
+[ok] Updating openclaw.json...
+[ok] Sigilum OpenClaw integration installed
+
+Dashboard URL:
+  http://127.0.0.1:8788
+
+Passkey setup URL:
+  http://127.0.0.1:8788/bootstrap/passkey?namespace=johndee
+
+CLI defaults written to:
+  ~/.sigilum/config.env
+```
+
+Install with authorization notify:
+
+```bash
+sigilum openclaw install \
+  --namespace johndee \
+  --enable-authz-notify true \
+  --owner-token <jwt-token>
+```
+
+Restart OpenClaw after install:
+
+```bash
+sigilum openclaw install --namespace johndee --restart
+```
+
+### What Gets Installed
+
+The installer creates and configures:
+
+1. **Hooks** (`~/.openclaw/hooks/`):
+   - `sigilum-plugin` - Main identity provider hook
+   - `sigilum-authz-notify` - Authorization notification hook (optional)
+
+2. **Skills** (`~/.openclaw/skills/`):
+   - `sigilum` - Sigilum management skill
+
+3. **Runtime** (workspace or fallback location):
+   - `sigilum` CLI launcher
+   - Gateway binaries
+   - Supporting scripts
+
+4. **Configuration**:
+   - Updates `openclaw.json` with hook and skill entries
+   - Sets environment variables for namespace, URLs, and runtime paths
+   - Stores master keys and credentials securely
+
+5. **Keys and Tokens** (oss-local mode):
+   - Namespace owner user registration
+   - Namespace-owner JWT token
+   - Token storage at `~/.openclaw/.sigilum/owner-token-<namespace>.jwt`
+   - CLI defaults at `~/.sigilum/config.env`
+
+### Mode Differences
+
+#### Managed Mode
+
+- Control plane: Hosted at `api.sigilum.id`
+- Dashboard: `sigilum.id`
+- Gateway: Runs locally
+- Identity: Register at `sigilum.id` and sign in with passkey
+- Token: Obtained through browser login flow
+
+#### OSS-Local Mode
+
+- Control plane: Local API at `127.0.0.1:8787`
+- Dashboard: Local at `127.0.0.1:8788`
+- Gateway: Runs locally
+- Identity: Auto-registered during install
+- Token: Auto-issued during install
+- Auto-start: Can automatically start local stack if down
+
+## openclaw uninstall
+
+Remove Sigilum hooks, skills, runtime, and keys from OpenClaw.
+
+### Usage
+
+```bash
+sigilum openclaw uninstall [options]
+```
+
+### Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--openclaw-home <path>` | `~/.openclaw` | OpenClaw home directory |
+| `--config <path>` | `<openclaw-home>/openclaw.json` | OpenClaw config path |
+| `--workspace <path>` | Auto-detected | Workspace cleanup path |
+| `--key-root <path>` | Auto-detected | Key root cleanup path |
+| `--runtime-root <path>` | Auto-detected | Runtime root cleanup path |
+| `--sigilum-home <path>` | Auto-detected | SIGILUM_HOME cleanup path |
+
+### Examples
+
+Uninstall with defaults:
+
+```bash
+sigilum openclaw uninstall
+```
+
+Output:
+```
+[i] sigilum 1.0.0 (openclaw)
+[ok] Removing hooks...
+[ok] Removing skills...
+[ok] Removing runtime...
+[ok] Removing keys...
+[ok] Updating openclaw.json...
+[ok] Sigilum OpenClaw integration removed
+```
+
+Uninstall with custom paths:
+
+```bash
+sigilum openclaw uninstall \
+  --openclaw-home ~/.openclaw \
+  --workspace ~/agent-workspace
+```
+
+### What Gets Removed
+
+1. **Hooks**:
+   - `~/.openclaw/hooks/sigilum-plugin`
+   - `~/.openclaw/hooks/sigilum-authz-notify`
+
+2. **Skills**:
+   - `~/.openclaw/skills/sigilum` (in OpenClaw home)
+   - Workspace skill mirror (if configured)
+
+3. **Runtime**:
+   - Workspace `.sigilum/runtime` folder
+   - Key directories and token files
+
+4. **Configuration**:
+   - Sigilum entries removed from `openclaw.json`
+   - Config backup created before modification
+   - `~/.sigilum/config.env` (only if managed by installer)
+
+## openclaw status
+
+Show current OpenClaw Sigilum installation status.
+
+### Usage
+
+```bash
+sigilum openclaw status
+```
+
+### Examples
+
+Check installation status:
+
+```bash
+sigilum openclaw status
+```
+
+Output:
+```
+OpenClaw status
+  home:   /home/user/.openclaw
+  config: /home/user/.openclaw/openclaw.json
+[ok]   /home/user/.openclaw/hooks/sigilum-plugin
+[ok]   /home/user/.openclaw/hooks/sigilum-authz-notify
+[ok]   /home/user/.openclaw/skills/sigilum
+
+[i] OpenClaw config summary:
+Config summary:
+  mode: managed
+  namespace: johndee
+  dashboard: https://sigilum.id
+  runtime_root: /home/user/agent-workspace/.sigilum/runtime
+  runtime_root_exists: true
+  passkey setup: https://sigilum.id/bootstrap/passkey?namespace=johndee
+  hook sigilum-plugin enabled: true
+  hook sigilum-authz-notify enabled: false
+  skill sigilum enabled: true
+```
+
+Missing components:
+
+```bash
+sigilum openclaw status
+```
+
+Output:
+```
+OpenClaw status
+  home:   /home/user/.openclaw
+  config: /home/user/.openclaw/openclaw.json
+[ok]   /home/user/.openclaw/hooks/sigilum-plugin
+[warn] missing /home/user/.openclaw/hooks/sigilum-authz-notify
+[ok]   /home/user/.openclaw/skills/sigilum
+
+[i] OpenClaw config summary:
+Config summary:
+  mode: managed
+  namespace: johndee
+  ...
+```
+
+## Environment Variables
+
+All OpenClaw commands recognize these environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `OPENCLAW_HOME` | OpenClaw home directory |
+| `OPENCLAW_CONFIG_PATH` | OpenClaw config file path |
+| `SIGILUM_NAMESPACE` | Default namespace |
+| `SIGILUM_MODE` | Sigilum mode (managed or oss-local) |
+| `SIGILUM_API_URL` | API base URL |
+| `SIGILUM_OWNER_TOKEN` | Namespace-owner JWT token |
+
+## Troubleshooting
+
+### Install fails with "Missing required command"
+
+For oss-local mode, ensure required tools are installed:
+
+```bash
+node --version   # >= 20
+pnpm --version   # 10.29.3
+go version       # >= 1.23
+```
+
+### "openclaw.json" parse error
+
+Backup your config and validate JSON:
+
+```bash
+cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.backup
+node -e "console.log(JSON.stringify(require('./.openclaw/openclaw.json'), null, 2))"
+```
+
+### Runtime not found
+
+The runtime root should contain the sigilum launcher and gateway binaries. Check status output for `runtime_root_exists: false` and reinstall:
+
+```bash
+sigilum openclaw uninstall
+sigilum openclaw install --namespace johndee
+```
+
+### Token file missing (oss-local)
+
+Regenerate the owner token:
+
+```bash
+sigilum auth refresh --mode oss-local --namespace johndee
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Gateway Commands" icon="server" href="/cli/gateway">
+    Manage the Sigilum gateway
+  </Card>
+  <Card title="Authentication" icon="key" href="/cli/identity">
+    Manage namespace-owner credentials
+  </Card>
+</CardGroup>

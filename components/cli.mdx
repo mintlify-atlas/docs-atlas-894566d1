@@ -1,0 +1,656 @@
+---
+title: 'Sigilum CLI'
+description: 'Local developer CLI for running Sigilum stack, managing services, and testing'
+---
+
+The Sigilum CLI (`sigilum`) is a local developer tool for running the Sigilum local stack, registering services, managing gateway connections, and running end-to-end tests.
+
+## Installation
+
+From repository root:
+
+```bash
+./sigilum install
+```
+
+Optional alias setup:
+
+```bash
+./sigilum install --with-alias
+```
+
+After install, reload your shell:
+
+```bash
+source ~/.zshrc
+```
+
+### Installation Options
+
+<Accordion title="Install Command Options">
+
+- `--bin-dir <path>`: Symlink destination (default: `~/.local/bin`)
+- `--rc-file <path>`: Shell rc file to update (auto-detected by default)
+- `--with-alias`: Add `alias sigilum="<repo>/sigilum"` in rc file
+
+</Accordion>
+
+### Release Installer
+
+For production environments, use the release installer:
+
+```bash
+curl -fsSL https://sigilum.id/install.sh | bash
+```
+
+Verification options:
+
+<Accordion title="Release Verification Options">
+
+- `--checksum <sha256>`: Explicit tarball SHA-256
+- `--checksum-url <url>` or `--checksum-file <path>`: Checksum file source
+- `--release-pubkey-file <path>`: Verify release checksum signature (`.sha256.sig`)
+- `--require-signature`: Fail unless signature verification succeeds
+
+Network timeout guards:
+- `CURL_CONNECT_TIMEOUT_SECONDS` (default: `5`)
+- `CURL_MAX_TIME_SECONDS` (default: `30`)
+
+</Accordion>
+
+## Global Options
+
+Global options are accepted before the command:
+
+```bash
+sigilum [global-options] <command> [args]
+```
+
+<Accordion title="Global Options">
+
+| Option | Environment Variable | Description |
+|--------|----------------------|-------------|
+| `--namespace <value>` | `GATEWAY_SIGILUM_NAMESPACE` | Set namespace |
+| `--sigilum-home <path>` | `GATEWAY_SIGILUM_HOME` | Set Sigilum home directory |
+| `--gateway-admin-url <url>` | `GATEWAY_ADMIN_URL` | Set gateway admin URL |
+| `--gateway-data-dir <path>` | `GATEWAY_DATA_DIR` | Set gateway data directory |
+| `--gateway-master-key <value>` | `GATEWAY_MASTER_KEY` | Set gateway master key |
+| `--api-port <port>` | `API_PORT` | Set API port |
+| `--gateway-port <port>` | `GATEWAY_PORT` | Set gateway port |
+| `--native-port <port>` | `NATIVE_PORT` | Set native service port |
+| `--upstream-port <port>` | `UPSTREAM_PORT` | Set upstream service port |
+
+If neither `GATEWAY_SIGILUM_NAMESPACE` nor `SIGILUM_NAMESPACE` is set, `sigilum` loads a default namespace from `~/.sigilum/config.env` before running commands.
+
+</Accordion>
+
+## Commands
+
+### Version Commands
+
+```bash
+# Show sigilum version
+sigilum version
+
+# Show component versions
+sigilum versions
+```
+
+Component versions include:
+- API
+- Gateway
+- Dashboard
+- SDKs (TypeScript, Go, Java, Python)
+- OpenClaw integration
+- Demo services
+- Contracts
+
+### Stack Management
+
+#### `sigilum up`
+
+Starts local API + gateway:
+
+```bash
+sigilum up
+```
+
+Behavior notes:
+- Gateway binaries are built/reused from `./.local/bin` to reduce memory usage
+- Set `GATEWAY_BUILD_BINARIES=false` to force `go run` mode
+- Auto-creates `apps/api/wrangler.toml` from template if missing
+- On low-memory Docker sandboxes (4 GB), prefer binary mode
+
+#### `sigilum down`
+
+Stops local listeners on known Sigilum dev ports:
+
+```bash
+sigilum down
+```
+
+Ports stopped:
+- API: `8787`
+- Gateway: `38100`
+- Demo native: `11000`
+- Demo upstream: `11100`
+- Envoy ingress: `38000`
+- Envoy admin: `38200`
+
+### Gateway Management
+
+#### `sigilum gateway start`
+
+Starts the gateway service:
+
+```bash
+sigilum gateway start \
+  --namespace johndee \
+  --home ~/.sigilum-workspace \
+  --api-url https://api.sigilum.id \
+  --addr :38100
+```
+
+<Accordion title="Gateway Start Options">
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--namespace <value>` | `$SIGILUM_NAMESPACE` | Namespace |
+| `--home <path>` | `~/.sigilum-workspace` | Gateway Sigilum home |
+| `--api-url <url>` | `https://api.sigilum.id` | Sigilum API base URL |
+| `--addr <addr>` | `:38100` | Listen address |
+
+Identity auto-bootstraps on first start.
+
+</Accordion>
+
+#### `sigilum gateway pair`
+
+Connects local gateway to hosted dashboard via WebSocket bridge:
+
+```bash
+sigilum gateway pair \
+  --session-id <id> \
+  --pair-code <code> \
+  --namespace johndee
+```
+
+For remote/headless hosts, use daemon mode:
+
+```bash
+sigilum gateway pair --daemon \
+  --session-id <id> \
+  --pair-code <code> \
+  --namespace johndee
+```
+
+<Accordion title="Gateway Pair Options">
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--session-id <id>` | - | Pairing session ID from dashboard |
+| `--pair-code <code>` | - | Pairing code from dashboard |
+| `--namespace <ns>` | - | Namespace |
+| `--api-url <url>` | Auto-detected | Sigilum API base URL |
+| `--gateway-admin-url <url>` | `http://127.0.0.1:38100` | Local gateway admin endpoint |
+| `--reconnect-ms <ms>` | `2000` | WebSocket reconnect delay |
+| `--connect-timeout-ms <ms>` | `5000` | Preflight/connect timeout |
+| `--daemon` | - | Run bridge in background |
+| `--status` | - | Show daemon status |
+| `--stop` | - | Stop daemon process |
+
+**Important:**
+- `--api-url` must point to Sigilum API service, not dashboard app
+- Local gateway admin must be running on `--gateway-admin-url`
+- Namespace-owner JWT is not required for gateway pairing
+
+</Accordion>
+
+#### `sigilum gateway connect`
+
+Single command for managed onboarding (ensures gateway health, then starts pair bridge):
+
+```bash
+sigilum gateway connect \
+  --session-id <id> \
+  --pair-code <code> \
+  --namespace johndee \
+  --api-url https://api.sigilum.id
+```
+
+### Service Management
+
+#### `sigilum service add`
+
+Registers a service in local API DB and creates gateway connection:
+
+```bash
+sigilum service add \
+  --service-slug linear \
+  --service-name "Linear" \
+  --mode gateway \
+  --upstream-base-url https://api.linear.app \
+  --auth-mode bearer \
+  --upstream-secret-env LINEAR_TOKEN
+```
+
+<Accordion title="Service Add Options">
+
+**General Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--service-slug <slug>` | - | Service slug (required) |
+| `--service-name <name>` | `<slug>` | Service display name |
+| `--description <text>` | - | Service description |
+| `--domain <domain>` | `localhost` | Service domain |
+| `--namespace <ns>` | `johndee` or `$GATEWAY_SIGILUM_NAMESPACE` | Namespace |
+| `--email <email>` | `<namespace>@local.sigilum` | Owner email |
+| `--mode <mode>` | `native` | `native` or `gateway` |
+
+**Gateway Mode Options:**
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--upstream-base-url <url>` | - | Upstream API base URL (required) |
+| `--auth-mode <mode>` | `bearer` | `bearer`, `header_key`, or `query_param` |
+| `--upstream-header <name>` | - | Upstream auth header name |
+| `--auth-prefix <value>` | - | Auth header prefix (e.g., `Bearer `) |
+| `--upstream-secret-key <key>` | - | Key name in gateway secrets map |
+| `--upstream-secret <value>` | - | Provide token/secret directly |
+| `--upstream-secret-env <name>` | - | Read token/secret from env var |
+| `--upstream-secret-file <path>` | - | Read token/secret from file |
+| `--reveal-secrets` | - | Print raw key/secret values |
+| `--gateway-admin-url <url>` | `http://127.0.0.1:38100` | Gateway admin endpoint |
+| `--gateway-data-dir <path>` | - | Fallback gateway data dir |
+| `--gateway-master-key <value>` | - | Fallback gateway master key |
+
+**Notes:**
+- Use only one secret source: `--upstream-secret`, `--upstream-secret-env`, or `--upstream-secret-file`
+- If none provided, a random secret is generated
+- Service API keys stored in `.sigilum-workspace/service-api-key-<slug>`
+- Gateway secrets stored in `.sigilum-workspace/gateway-connection-secret-<slug>`
+- Raw secret values are hidden by default
+
+</Accordion>
+
+**Examples:**
+
+Native service:
+
+```bash
+sigilum service add \
+  --service-slug my-native-service \
+  --service-name "My Native Service" \
+  --mode native
+```
+
+Gateway service (Linear):
+
+```bash
+export LINEAR_TOKEN="lin_api_abc123..."
+
+sigilum service add \
+  --service-slug linear \
+  --service-name "Linear" \
+  --mode gateway \
+  --upstream-base-url https://api.linear.app \
+  --auth-mode bearer \
+  --upstream-secret-env LINEAR_TOKEN
+```
+
+Gateway service (query parameter auth):
+
+```bash
+export TYPEFULLY_API_KEY="tfy_abc123..."
+
+sigilum service add \
+  --service-slug typefully \
+  --service-name "Typefully" \
+  --mode gateway \
+  --upstream-base-url https://mcp.typefully.com \
+  --auth-mode query_param \
+  --upstream-header TYPEFULLY_API_KEY \
+  --upstream-secret-key api_key \
+  --upstream-secret-env TYPEFULLY_API_KEY
+```
+
+#### `sigilum service list`
+
+Lists services registered for a namespace:
+
+```bash
+sigilum service list --namespace johndee
+
+# JSON output
+sigilum service list --namespace johndee --json
+```
+
+Output marks each service as `native` or `gateway` based on gateway connection metadata.
+
+#### `sigilum service secret set`
+
+Rotates/sets upstream secret for an existing gateway connection:
+
+```bash
+export LINEAR_TOKEN="lin_api_new_token..."
+
+sigilum service secret set \
+  --service-slug linear \
+  --upstream-secret-env LINEAR_TOKEN
+
+# With explicit secret key and reveal
+sigilum service secret set \
+  --service-slug linear \
+  --upstream-secret-key access_token \
+  --upstream-secret-env LINEAR_TOKEN \
+  --reveal-secrets
+```
+
+### OpenClaw Integration
+
+#### `sigilum openclaw install`
+
+Installs Sigilum hooks + skills into OpenClaw:
+
+```bash
+sigilum openclaw install
+```
+
+Interactive install prompts for:
+- Namespace
+- OpenClaw home directory
+- Sigilum API URL
+
+<Accordion title="OpenClaw Install Options">
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--openclaw-home <path>` | `~/.openclaw` | OpenClaw home directory |
+| `--config <path>` | Auto-detected | OpenClaw config file |
+| `--mode <mode>` | `managed` | `managed` or `oss-local` |
+| `--source-home <path>` | - | Required for `oss-local` when using global install |
+| `--namespace <value>` | - | Namespace |
+| `--gateway-url <url>` | Auto-detected | Gateway URL |
+| `--api-url <url>` | Auto-detected | Sigilum API URL |
+| `--interactive` | - | Enable interactive prompts |
+| `--non-interactive` | - | Disable interactive prompts |
+| `--auto-start-sigilum <bool>` | `true` | Auto-start Sigilum on agent launch |
+| `--key-root <path>` | Auto-detected | Key storage directory |
+| `--runtime-root <path>` | Auto-detected | Runtime bundle directory |
+| `--enable-authz-notify <bool>` | `false` | Enable authz notify hook |
+| `--owner-token <token>` | - | Namespace owner token |
+| `--auto-owner-token <bool>` | `true` (oss-local) | Auto-issue owner token |
+| `--owner-email <email>` | `<namespace>@local.sigilum` | Owner email |
+| `--restart` | - | Restart OpenClaw after install |
+
+</Accordion>
+
+**OSS-Local Mode:**
+
+For local API stack:
+
+```bash
+sigilum openclaw install \
+  --mode oss-local \
+  --namespace johndee \
+  --api-url http://127.0.0.1:8787
+```
+
+Installer:
+- Auto-registers local namespace owner (if missing)
+- Issues local JWT
+- Writes token to `<openclaw-home>/.sigilum/owner-token-<namespace>.jwt`
+- Prints dashboard URL and passkey setup URL
+- Writes CLI defaults to `~/.sigilum/config.env`
+
+**Managed Mode:**
+
+For hosted dashboard:
+
+```bash
+sigilum openclaw install \
+  --mode managed \
+  --namespace johndee \
+  --api-url https://api.sigilum.id
+```
+
+Post-install:
+1. Sign in at `https://sigilum.id` to reserve namespace
+2. Run `sigilum auth login --mode managed --namespace johndee --owner-token-stdin`
+3. `sigilum-authz-notify` remains disabled by default
+
+#### `sigilum openclaw uninstall`
+
+Removes Sigilum OpenClaw footprint:
+
+```bash
+sigilum openclaw uninstall
+```
+
+Removes:
+- Hooks (`sigilum-plugin`, `sigilum-authz-notify`)
+- Skills (`sigilum`) in OpenClaw home and workspace
+- Workspace `.sigilum` runtime folder
+- Sigilum entries from `openclaw.json` (with backup)
+- Installer-managed `~/.sigilum/config.env` (if marked as managed)
+
+#### `sigilum openclaw status`
+
+Shows OpenClaw integration status:
+
+```bash
+sigilum openclaw status
+```
+
+Output includes:
+- Configured namespace
+- Dashboard URL
+- Passkey setup URL
+- Runtime root
+- Runtime existence
+
+### Authentication
+
+#### `sigilum auth login`
+
+Bootstraps namespace-owner JWT tokens:
+
+**Local mode:**
+
+```bash
+sigilum auth login --mode oss-local --namespace johndee
+```
+
+**Managed mode:**
+
+```bash
+sigilum auth login --mode managed --namespace johndee --owner-token-stdin
+```
+
+#### `sigilum auth refresh`
+
+Refreshes local token:
+
+```bash
+sigilum auth refresh --mode oss-local --namespace johndee
+```
+
+#### `sigilum auth show`
+
+Shows stored token:
+
+```bash
+sigilum auth show --namespace johndee
+```
+
+**Alias:**
+
+`sigilum login` is equivalent to `sigilum auth login`.
+
+### Diagnostics
+
+#### `sigilum doctor`
+
+Runs local diagnostics:
+
+```bash
+sigilum doctor
+```
+
+Checks:
+- Required tools (`node`, `pnpm`, `go`, `curl`)
+- Optional tools (Java/Maven)
+- Wrangler config/template
+- Local identity/key files
+- API/gateway health
+- OpenClaw config permissions
+- Authz-notify token posture
+
+<Accordion title="Doctor Options">
+
+```bash
+# Machine-readable JSON output
+sigilum doctor --json
+
+# Auto-remediation mode
+sigilum doctor --fix
+```
+
+HTTP health probes use timeout guards:
+- `CURL_CONNECT_TIMEOUT_SECONDS` (default: `5`)
+- `CURL_MAX_TIME_SECONDS` (default: `15`)
+
+</Accordion>
+
+### Testing
+
+#### `sigilum e2e-tests`
+
+Runs end-to-end tests:
+
+```bash
+sigilum e2e-tests
+```
+
+By default:
+- Performs clean-start (stops listeners on ports `8787`, `38100`, `11000`, `11100`)
+- Starts local stack
+- Starts demo native + gateway upstream services
+- Runs `scripts/test-agent-simulator.mjs`
+- Prints pass/fail matrix
+
+Reuse running processes:
+
+```bash
+SIGILUM_E2E_CLEAN_START=false sigilum e2e-tests
+```
+
+#### `sigilum agent-simulator`
+
+Runs agent simulator only (expects stack/services already running):
+
+```bash
+sigilum agent-simulator
+```
+
+Simulator:
+- Creates approved/unapproved test identities
+- Seeds local authorization state
+- Sends signed and unsigned requests
+- Verifies pass/fail auth behavior
+
+## Help
+
+Top-level help:
+
+```bash
+sigilum --help
+```
+
+Command-specific help:
+
+```bash
+sigilum service --help
+sigilum gateway --help
+sigilum openclaw --help
+sigilum auth --help
+sigilum doctor --help
+```
+
+Help for subcommands:
+
+```bash
+sigilum help openclaw
+sigilum help service
+sigilum help gateway
+```
+
+## Configuration Files
+
+The CLI uses several configuration files:
+
+### `~/.sigilum/config.env`
+
+Persisted CLI defaults:
+
+```bash
+GATEWAY_SIGILUM_NAMESPACE=johndee
+SIGILUM_NAMESPACE=johndee
+SIGILUM_OPENCLAW_MANAGED=true
+```
+
+### `.sigilum-workspace/`
+
+Local workspace for service API keys and gateway connection secrets:
+
+```
+.sigilum-workspace/
+├── service-api-key-linear
+├── service-api-key-slack
+├── gateway-connection-secret-linear
+└── gateway-connection-secret-slack
+```
+
+### `~/.sigilum-workspace/`
+
+Default gateway identity storage:
+
+```
+~/.sigilum-workspace/
+└── johndee.key
+```
+
+## Environment Variables
+
+The CLI respects these environment variables:
+
+<Accordion title="CLI Environment Variables">
+
+| Variable | Description |
+|----------|-------------|
+| `GATEWAY_SIGILUM_NAMESPACE` | Default namespace |
+| `SIGILUM_NAMESPACE` | Default namespace (alternative) |
+| `GATEWAY_SIGILUM_HOME` | Gateway Sigilum home directory |
+| `GATEWAY_ADMIN_URL` | Gateway admin URL |
+| `GATEWAY_DATA_DIR` | Gateway data directory |
+| `GATEWAY_MASTER_KEY` | Gateway master key |
+| `API_PORT` | API port |
+| `GATEWAY_PORT` | Gateway port |
+| `NATIVE_PORT` | Native service port |
+| `UPSTREAM_PORT` | Upstream service port |
+| `SIGILUM_API_URL` | Sigilum API URL |
+| `SIGILUM_REGISTRY_URL` | Sigilum API URL (alternative) |
+| `OPENCLAW_HOME` | OpenClaw home directory |
+| `OPENCLAW_CONFIG_PATH` | OpenClaw config file path |
+| `GATEWAY_BUILD_BINARIES` | Build gateway binaries (default: `true`) |
+| `SIGILUM_E2E_CLEAN_START` | Clean start for e2e tests (default: `true`) |
+
+</Accordion>
+
+## Related Documentation
+
+- [API](/components/api) - Control plane
+- [Gateway](/components/gateway) - Data plane
+- [SDK Reference](/sdks/typescript) - Client libraries
+- [OpenClaw Integration](/integrations/openclaw) - AI agent integration
