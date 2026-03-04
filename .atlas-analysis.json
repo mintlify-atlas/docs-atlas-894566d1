@@ -1,0 +1,134 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Sigilum",
+  "projectDescription": "Open protocol for verifiable AI agent identity, signed delegation chains, and machine-speed accountability.",
+  "theme": "aspen",
+  "primaryColor": "#6366f1",
+  "lightColor": "#818cf8",
+  "darkColor": "#4f46e5",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart-managed",
+              "quickstart-self-hosted"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/architecture",
+              "concepts/identity-model",
+              "concepts/authorization-flow",
+              "concepts/deployment-modes"
+            ]
+          },
+          {
+            "group": "Components",
+            "pages": [
+              "components/api",
+              "components/gateway",
+              "components/cli"
+            ]
+          },
+          {
+            "group": "SDKs",
+            "pages": [
+              "sdks/overview",
+              "sdks/typescript",
+              "sdks/python",
+              "sdks/go"
+            ]
+          },
+          {
+            "group": "Integrations",
+            "pages": [
+              "integrations/openclaw",
+              "integrations/providers"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Sigilum API",
+            "pages": [
+              "api-reference/overview",
+              "api-reference/authentication",
+              "api-reference/namespaces",
+              "api-reference/authorizations",
+              "api-reference/verification",
+              "api-reference/did-resolution"
+            ]
+          },
+          {
+            "group": "Gateway API",
+            "pages": [
+              "api-reference/gateway/overview",
+              "api-reference/gateway/proxy",
+              "api-reference/gateway/mcp",
+              "api-reference/gateway/admin"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "CLI Reference",
+        "groups": [
+          {
+            "group": "Commands",
+            "pages": [
+              "cli/overview",
+              "cli/gateway",
+              "cli/openclaw",
+              "cli/identity"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Protocol",
+        "groups": [
+          {
+            "group": "Specifications",
+            "pages": [
+              "protocol/overview",
+              "protocol/did-method",
+              "protocol/signing-profile",
+              "protocol/security"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Verifiable agent identity with DID-based authentication",
+    "Signed delegation chains with RFC 9421 HTTP signatures",
+    "Local gateway for request signing and approved-claim enforcement",
+    "Multi-language SDKs (TypeScript, Python, Go)",
+    "OpenClaw integration for AI agent workflows",
+    "MCP (Model Context Protocol) support with tool filtering",
+    "Managed, enterprise, and open-source deployment modes"
+  ],
+  "publicApiSurface": [
+    "GET /v1/namespaces/claims - List approved service authorizations",
+    "POST /v1/claims - Submit authorization request",
+    "PATCH /v1/claims/:id - Update authorization status",
+    "GET /v1/verify - Verify agent authorization",
+    "GET /.well-known/did.json - Resolve DID document",
+    "sigilum gateway start - Start local gateway",
+    "sigilum gateway connect - Pair gateway with dashboard",
+    "sigilum openclaw connect - One-command OpenClaw onboarding",
+    "@sigilum/sdk (TypeScript SDK)",
+    "sigilum (Python SDK)",
+    "sigilum.local/sdk-go (Go SDK)"
+  ]
+}
