@@ -1,0 +1,372 @@
+---
+title: 'Services Management'
+description: 'Manage services, API keys, and webhooks for your namespace'
+---
+
+## Overview
+
+Service management endpoints allow namespace owners to register services, generate API keys, and configure webhooks through the dashboard or API.
+
+<Note>
+All service management endpoints require **dashboard authentication** (cookie-based session) and return data scoped to the authenticated namespace owner.
+</Note>
+
+## Services
+
+### List Services
+
+<ParamField path="GET /v1/services" type="endpoint">
+  List all services for the authenticated namespace owner.
+</ParamField>
+
+**Authentication:** Cookie-based session
+
+**Response:**
+
+<ResponseField name="services" type="array">
+  <Expandable title="Service Object">
+    <ResponseField name="id" type="string">
+      Unique service identifier
+    </ResponseField>
+    <ResponseField name="namespace" type="string">
+      Namespace that owns this service
+    </ResponseField>
+    <ResponseField name="slug" type="string">
+      Service slug (used in authorization requests)
+    </ResponseField>
+    <ResponseField name="name" type="string">
+      Human-readable service name
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Service description
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 timestamp
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Create Service
+
+<ParamField path="POST /v1/services" type="endpoint">
+  Register a new service for your namespace.
+</ParamField>
+
+**Authentication:** Cookie-based session
+
+**Request Body:**
+
+<ParamField path="slug" type="string" required>
+  Service slug (lowercase, alphanumeric, hyphens allowed)
+</ParamField>
+
+<ParamField path="name" type="string" required>
+  Human-readable service name
+</ParamField>
+
+<ParamField path="description" type="string">
+  Optional service description
+</ParamField>
+
+**Response:** Returns the created service object (201 Created)
+
+### Get Service
+
+<ParamField path="GET /v1/services/{serviceId}" type="endpoint">
+  Retrieve details for a specific service.
+</ParamField>
+
+**Path Parameters:**
+
+<ParamField path="serviceId" type="string" required>
+  Service UUID
+</ParamField>
+
+**Response:** Returns the service object
+
+### Update Service
+
+<ParamField path="PATCH /v1/services/{serviceId}" type="endpoint">
+  Update service name or description.
+</ParamField>
+
+**Request Body:**
+
+<ParamField path="name" type="string">
+  Updated service name
+</ParamField>
+
+<ParamField path="description" type="string">
+  Updated description
+</ParamField>
+
+### Delete Service
+
+<ParamField path="DELETE /v1/services/{serviceId}" type="endpoint">
+  Permanently delete a service. This also deletes all associated API keys and webhooks.
+</ParamField>
+
+<Warning>
+This action is irreversible. All authorization requests associated with this service will become orphaned.
+</Warning>
+
+## API Keys
+
+### List API Keys
+
+<ParamField path="GET /v1/services/{serviceId}/keys" type="endpoint">
+  List all API keys for a service.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="keys" type="array">
+  <Expandable title="API Key Object">
+    <ResponseField name="id" type="string">
+      Key ID (used for revocation)
+    </ResponseField>
+    <ResponseField name="prefix" type="string">
+      First 8 characters of the key (for identification)
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 timestamp
+    </ResponseField>
+    <ResponseField name="last_used_at" type="string">
+      ISO 8601 timestamp of last use (null if never used)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Note>
+Full API key values are only returned once at creation time. Store them securely.
+</Note>
+
+### Create API Key
+
+<ParamField path="POST /v1/services/{serviceId}/keys" type="endpoint">
+  Generate a new API key for the service.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="key" type="string">
+  The full API key (only returned once)
+</ResponseField>
+
+<ResponseField name="id" type="string">
+  Key ID for future reference
+</ResponseField>
+
+<ResponseField name="prefix" type="string">
+  Key prefix for identification
+</ResponseField>
+
+**Example Response:**
+
+```json
+{
+  "key": "sgl_sk_prod_1234567890abcdef...",
+  "id": "key_abc123",
+  "prefix": "sgl_sk_p"
+}
+```
+
+<Warning>
+Store the full API key securely. It cannot be retrieved again after creation.
+</Warning>
+
+### Revoke API Key
+
+<ParamField path="DELETE /v1/services/{serviceId}/keys/{keyId}" type="endpoint">
+  Revoke an API key. Revoked keys cannot be used for new requests.
+</ParamField>
+
+**Path Parameters:**
+
+<ParamField path="keyId" type="string" required>
+  The key ID to revoke
+</ParamField>
+
+## Webhooks
+
+Service webhooks receive durable delivery of authorization lifecycle events.
+
+### List Webhooks
+
+<ParamField path="GET /v1/services/{serviceId}/webhooks" type="endpoint">
+  List all webhook configurations for a service.
+</ParamField>
+
+**Response:**
+
+<ResponseField name="webhooks" type="array">
+  <Expandable title="Webhook Object">
+    <ResponseField name="id" type="string">
+      Webhook ID
+    </ResponseField>
+    <ResponseField name="url" type="string">
+      Destination URL for webhook events
+    </ResponseField>
+    <ResponseField name="events" type="array">
+      Array of event types this webhook subscribes to
+    </ResponseField>
+    <ResponseField name="secret" type="string">
+      Webhook signing secret prefix (full secret not returned)
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 timestamp
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Create Webhook
+
+<ParamField path="POST /v1/services/{serviceId}/webhooks" type="endpoint">
+  Register a new webhook endpoint for authorization events.
+</ParamField>
+
+**Request Body:**
+
+<ParamField path="url" type="string" required>
+  HTTPS URL to receive webhook events
+</ParamField>
+
+<ParamField path="events" type="array">
+  Array of event types to subscribe to (defaults to all events)
+  
+  Supported events:
+  - `request.submitted` - New authorization request
+  - `request.approved` - Request approved
+  - `request.rejected` - Request rejected
+  - `request.revoked` - Authorization revoked
+</ParamField>
+
+**Response:**
+
+<ResponseField name="id" type="string">
+  Webhook ID
+</ResponseField>
+
+<ResponseField name="secret" type="string">
+  Webhook signing secret (only returned once)
+</ResponseField>
+
+<Note>
+Use the webhook secret to verify event signatures using HMAC-SHA256.
+</Note>
+
+### Delete Webhook
+
+<ParamField path="DELETE /v1/services/{serviceId}/webhooks/{webhookId}" type="endpoint">
+  Remove a webhook configuration. No further events will be delivered.
+</ParamField>
+
+**Path Parameters:**
+
+<ParamField path="webhookId" type="string" required>
+  Webhook ID to delete
+</ParamField>
+
+## Webhook Event Format
+
+All webhook events are delivered as POST requests with the following structure:
+
+```json
+{
+  "event": "request.approved",
+  "timestamp": "2024-03-04T12:00:00Z",
+  "data": {
+    "claim_id": "claim_abc123",
+    "namespace": "acme",
+    "service": "api-gateway",
+    "agent_key": "did:key:z6Mk...",
+    "status": "approved"
+  }
+}
+```
+
+**Event Signature:**
+
+Each webhook request includes a `X-Sigilum-Signature` header containing an HMAC-SHA256 signature:
+
+```
+X-Sigilum-Signature: t=<timestamp>,v1=<signature>
+```
+
+Verify the signature using your webhook secret:
+
+```typescript
+const payload = `${timestamp}.${requestBody}`;
+const expectedSignature = crypto
+  .createHmac('sha256', webhookSecret)
+  .update(payload)
+  .digest('hex');
+```
+
+## Usage Example
+
+Complete workflow for setting up a service:
+
+<Steps>
+  <Step title="Create a service">
+    ```bash
+    POST /v1/services
+    {
+      "slug": "api-gateway",
+      "name": "API Gateway",
+      "description": "Main API gateway service"
+    }
+    ```
+  </Step>
+
+  <Step title="Generate an API key">
+    ```bash
+    POST /v1/services/{serviceId}/keys
+    
+    # Response: store this key securely
+    {
+      "key": "sgl_sk_prod_abc123...",
+      "id": "key_xyz789"
+    }
+    ```
+  </Step>
+
+  <Step title="Configure a webhook">
+    ```bash
+    POST /v1/services/{serviceId}/webhooks
+    {
+      "url": "https://api.example.com/webhooks/sigilum",
+      "events": ["request.approved", "request.revoked"]
+    }
+    ```
+  </Step>
+
+  <Step title="Use the API key">
+    The service can now submit authorization requests using the API key:
+    
+    ```bash
+    curl -X POST https://api.sigilum.id/v1/claims \
+      -H 'Authorization: Bearer sgl_sk_prod_abc123...' \
+      -H 'signature-input: ...' \
+      -H 'signature: ...' \
+      # ... additional signed headers
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authorization Flow" icon="arrows-turn-right" href="/api-reference/authorizations">
+    Submit and manage authorization requests
+  </Card>
+  <Card title="Verification" icon="shield-check" href="/api-reference/verification">
+    Verify agent authorization status
+  </Card>
+  <Card title="Dashboard Auth" icon="fingerprint" href="/api-reference/dashboard-auth">
+    Authenticate to manage your namespace
+  </Card>
+  <Card title="Webhooks Guide" icon="webhook" href="/concepts/authorization-flow">
+    Learn about webhook delivery and retry logic
+  </Card>
+</CardGroup>
